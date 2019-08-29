@@ -1,0 +1,40 @@
+{
+    "batch_size":	32,
+    "env_name":	"SeaquestNoFrameskip-v4",
+    "epsilon_decay_period":	62500.0,
+    "epsilon_eval":	0.01,
+    "epsilon_train":	0.1,
+    "evaluation_step":	31250.0,
+    "exp_name":	"dqn_seaquest",
+    "gamma":	0.99,
+    "iteration":	200,
+    "logger_kwargs":	{
+        "exp_name":	"dqn_seaquest",
+        "output_dir":	"/home/zhr/workspace/Value-based-rl/data/dqn_seaquest/dqn_seaquest_s0"
+    },
+    "max_ep_len":	6750.0,
+    "replay_size":	1000000.0,
+    "self":	{
+        "<__main__.Dqn object at 0x7f681f51d978>":	{
+            "logger":	{
+                "<utils.logx.EpochLogger object at 0x7f681f51d9b0>":	{
+                    "epoch_dict":	{},
+                    "exp_name":	"dqn_seaquest",
+                    "first_row":	true,
+                    "log_current_row":	{},
+                    "log_headers":	[],
+                    "output_dir":	"/home/zhr/workspace/Value-based-rl/data/dqn_seaquest/dqn_seaquest_s0",
+                    "output_file":	{
+                        "<_io.TextIOWrapper name='/home/zhr/workspace/Value-based-rl/data/dqn_seaquest/dqn_seaquest_s0/progress.txt' mode='w+' encoding='UTF-8'>":	{
+                            "mode":	"w+"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "target_update_period":	2000.0,
+    "train_step":	62500.0,
+    "update_period":	4,
+    "warmup_steps":	5000.0
+}

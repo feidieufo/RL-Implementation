@@ -1,0 +1,40 @@
+{
+    "batch_size":	32,
+    "env_name":	"CartPole-v1",
+    "epsilon_decay_period":	100,
+    "epsilon_eval":	0.01,
+    "epsilon_train":	0.1,
+    "evaluation_step":	1000,
+    "exp_name":	"dqn_cartpole",
+    "gamma":	0.99,
+    "iteration":	200,
+    "logger_kwargs":	{
+        "exp_name":	"dqn_cartpole",
+        "output_dir":	"/home/zhr/workspace/pycharm/Value-based-rl/data/dqn_cartpole/dqn_cartpole_s0"
+    },
+    "max_ep_len":	200,
+    "replay_size":	1000000.0,
+    "self":	{
+        "<__main__.Dqn object at 0x7f02ec92db70>":	{
+            "logger":	{
+                "<utils.logx.EpochLogger object at 0x7f02ec92dba8>":	{
+                    "epoch_dict":	{},
+                    "exp_name":	"dqn_cartpole",
+                    "first_row":	true,
+                    "log_current_row":	{},
+                    "log_headers":	[],
+                    "output_dir":	"/home/zhr/workspace/pycharm/Value-based-rl/data/dqn_cartpole/dqn_cartpole_s0",
+                    "output_file":	{
+                        "<_io.TextIOWrapper name='/home/zhr/workspace/pycharm/Value-based-rl/data/dqn_cartpole/dqn_cartpole_s0/progress.txt' mode='w+' encoding='UTF-8'>":	{
+                            "mode":	"w+"
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "target_update_period":	50,
+    "train_step":	200,
+    "update_period":	10,
+    "warmup_steps":	0
+}
