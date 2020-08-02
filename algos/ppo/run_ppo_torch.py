@@ -1,5 +1,5 @@
 try:
-    import algos.gail.pytorch.core_torch as core
+    import algos.ppo.core_torch as core
 except Exception:
     import core_torch as core
 

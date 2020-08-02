@@ -1,14 +1,10 @@
-try:
-    import algos.gail.pytorch.core_torch as core
-except Exception:
-    import core_torch as core
-
 import numpy as np
 import gym
 import argparse
 import scipy
 from scipy import signal
 import pickle
+from collections import deque
 
 import os
 from utils.logx import EpochLogger
@@ -16,6 +12,35 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 import dmc2gym
 import env.atari_lib as atari
+
+class DMCFrameStack(gym.Wrapper):
+    def __init__(self, env, k):
+        gym.Wrapper.__init__(self, env)
+        self._k = k
+        self._frames = deque([], maxlen=k)
+        shp = env.observation_space.shape
+        self.observation_space = gym.spaces.Box(
+            low=0,
+            high=1,
+            shape=((shp[0] * k,) + shp[1:]),
+            dtype=env.observation_space.dtype
+        )
+        self._max_episode_steps = env._max_episode_steps
+
+    def reset(self):
+        obs = self.env.reset()
+        for _ in range(self._k):
+            self._frames.append(obs)
+        return self._get_obs()
+
+    def step(self, action):
+        obs, reward, done, info = self.env.step(action)
+        self._frames.append(obs)
+        return self._get_obs(), reward, done, info
+
+    def _get_obs(self):
+        assert len(self._frames) == self._k
+        return np.concatenate(list(self._frames), axis=0)
 
 def discount_cumsum(x, discount):
     """
@@ -213,7 +238,13 @@ if __name__ == '__main__':
     parser.add_argument('--anneal_lr', default=False)
     parser.add_argument('--debug', default=True)
     parser.add_argument('--log_every', default=10)
+    parser.add_argument('--network', default="cnn")
     args = parser.parse_args()
+
+    if args.network == "cnn" or args.encoder_type == 'state':
+        import algos.ppo.core_torch as core
+    elif args.network == "resnet":
+        import algos.ppo.core_resnet_simple_torch as core
 
     device = torch.device("cuda:"+str(args.gpu) if torch.cuda.is_available() else "cpu")
 
@@ -232,14 +263,12 @@ if __name__ == '__main__':
         width=args.image_size,
         frame_skip=args.action_repeat
     )
-    env = atari.DMCFrameStack(env, k=args.frame_stack)
+    if args.encoder_type == 'pixel':
+        env = DMCFrameStack(env, k=args.frame_stack)
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     env.seed(args.seed)
-    # if args.env_num > 1:
-    #     env = [env for _ in range(args.env_num)]
-    #     env = SubVectorEnv(env)
-    # env = CarRacing()
+
     state_dim = env.observation_space.shape
     act_dim = env.action_space.shape[0]
     action_max = env.action_space.high[0]
@@ -252,9 +281,10 @@ if __name__ == '__main__':
     reward_norm = Identity()
     if args.norm_state:
         state_norm = AutoNormalization(state_norm, state_dim, clip=5.0)
-    if args.norm_rewards:
+    if args.norm_rewards == "rewards":
         reward_norm = AutoNormalization(reward_norm, (), clip=5.0)
-        # reward_norm = RewardFilter(reward_norm, (), clip=5.0)
+    elif args.norm_rewards == "returns":
+        reward_norm = RewardFilter(reward_norm, (), clip=5.0)
 
     for iter in range(args.iteration):
         replay.reset()
@@ -296,36 +326,6 @@ if __name__ == '__main__':
         replay.get()
         writer.add_scalar("reward", logger.get_stats("reward")[0], global_step=iter)
         writer.add_histogram("action", np.array(replay.action), global_step=iter)
-
-        # for i in range(args.a_update):
-        #     for (s, a, r, adv, v) in replay.get_batch():
-        #         s_tensor = torch.tensor(s, dtype=torch.float32, device=device)
-        #         a_tensor = torch.tensor(a, dtype=torch.float32, device=device)
-        #         adv_tensor = torch.tensor(adv, dtype=torch.float32, device=device)
-        #
-        #         a_loss, info = ppo.train_a(s_tensor, a_tensor, adv_tensor)
-        #         logger.store(a_loss=a_loss)
-        #     #
-        #     #     if info["kl"]>0.3:
-        #     #         print("early stop in iter", iter, " :", i)
-        #     #         break
-        #     #
-        #     # if info["kl"] > 0.3:
-        #     #     break
-        #     writer.add_scalar("entropy", info["entropy"], global_step=iter*args.a_update+i)
-        #     writer.add_scalar("kl", info["kl"], global_step=iter * args.a_update + i)
-        # writer.add_scalar("aloss", a_loss, global_step=iter)
-        #
-        # for i in range(args.c_update):
-        #     for (s, a, r, adv, v) in replay.get_batch():
-        #         s_tensor = torch.tensor(s, dtype=torch.float32, device=device)
-        #         r_tensor = torch.tensor(r, dtype=torch.float32, device=device)
-        #         v_tensor = torch.tensor(v, dtype=torch.float32, device=device)
-        #
-        #         vloss = ppo.train_v(s_tensor, r_tensor, v_tensor)
-        #         logger.store(v_loss=vloss)
-        #
-        # writer.add_scalar("vloss", vloss, global_step=iter)
 
         for i in range(args.a_update):
             for (s, a, r, adv, v) in replay.get_batch(batch=args.batch):

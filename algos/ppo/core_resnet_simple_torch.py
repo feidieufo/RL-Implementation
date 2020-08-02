@@ -1,7 +1,7 @@
 import torch
 from torch.distributions import Normal, MultivariateNormal
 import numpy as np
-
+import torchvision.models as models
 
 class Discriminator(torch.nn.Module):
     def __init__(self, s_dim, a_dim):
@@ -50,50 +50,22 @@ def initialize_weights(mod, initialization_type, scale=1):
 class ActorCnnEmb(torch.nn.Module):
     def __init__(self, s_dim, emb_dim=100):
         super().__init__()
-        self.cnn = torch.nn.Sequential(
-            torch.nn.Conv2d(s_dim[0], 32, kernel_size=8, stride=4),
-            torch.nn.ReLU(),
-            torch.nn.Conv2d(32, 64, kernel_size=4, stride=2),
-            torch.nn.ReLU(),
-            torch.nn.Conv2d(64, 64, kernel_size=1, stride=1),
-            torch.nn.ReLU(),
-        )
+        self.conv_block = models.resnet18(pretrained=True)
+        for param in self.conv_block.parameters():
+            param.requires_grad = False
+        self.conv_block.fc = torch.nn.Linear(self.conv_block.fc.in_features, 512)
 
-        h = self.conv2d_size_out(self.conv2d_size_out(
-            self.conv2d_size_out(s_dim[1], kernel_size=8, stride=4), 4, 2), 1, 1)
-        w = self.conv2d_size_out(self.conv2d_size_out(
-            self.conv2d_size_out(s_dim[2], kernel_size=8, stride=4), 4, 2), 1, 1)
 
         self.fc = torch.nn.Sequential(
-            torch.nn.Linear(h*w*64, emb_dim),
-            torch.nn.ReLU(),
-            torch.nn.Linear(emb_dim, emb_dim),
-            torch.nn.ReLU())
-
-    def conv2d_size_out(self, size, kernel_size=5, stride=2):
-        return (size - (kernel_size - 1) - 1) // stride + 1
-
-    def forward(self, s):
-        cnn = self.cnn(s)
-        x = cnn.view(s.shape[0], -1)
-        x = self.fc(x)
-        return x
-
-
-class ActorEmb(torch.nn.Module):
-    def __init__(self, s_dim, emb_dim=100):
-        super().__init__()
-        s_dim = np.prod(s_dim)
-
-        self.fc = torch.nn.Sequential(
-            torch.nn.Linear(s_dim, emb_dim),
+            torch.nn.Linear(512, emb_dim),
             torch.nn.ReLU(),
             torch.nn.Linear(emb_dim, emb_dim),
             torch.nn.ReLU())
 
 
     def forward(self, s):
-        x = self.fc(s)
+        cnn = self.conv_block(s)
+        x = self.fc(cnn)
         return x
 
 
@@ -156,7 +128,7 @@ class Actor(torch.nn.Module):
             std = torch.exp(var)
 
             covariance = torch.diag(std, diagonal=0)
-            normal = MultivariateNormal(mean, covariance**2)
+            normal = MultivariateNormal(mean, covariance)
             action = normal.sample()                  # [1, a_dim]
             action = torch.squeeze(action, dim=0)     # [a_dim]
             # action = torch.clamp(action, min=-2, max=2)
@@ -168,53 +140,13 @@ class Actor(torch.nn.Module):
         std = torch.exp(var)
 
         covariance = torch.diag(std, diagonal=0)
-        normal = MultivariateNormal(mean, covariance**2)
+        normal = MultivariateNormal(mean, covariance)
         logpi = normal.log_prob(a)
         # logpi = torch.sum(log_prob, dim=1)
 
         return logpi, mean, std                        # [None,]
 
-class ActorDisc(torch.nn.Module):
-    def __init__(self, s_dim, a_num, emb_dim=100, input_type="state"):
-        super().__init__()
-        self.act_num = a_num
-        if input_type == "state":
-            self.emb = ActorEmb(s_dim)
-        else:
-            self.emb = ActorCnnEmb(s_dim)
 
-        self.final = torch.nn.Sequential(
-            torch.nn.Linear(emb_dim, 100),
-            torch.nn.ReLU(),
-            torch.nn.Linear(100, a_num),
-            torch.nn.Softmax()
-        )
-
-        initialize_weights(self.emb, "orthogonal")
-        initialize_weights(self.mu, "orthogonal")
-
-    def forward(self, s):
-        emb = self.emb(s)
-        x = self.final(emb)
-
-        return x
-
-    def select_action(self, s):
-        with torch.no_grad():
-            x = self(s)
-            normal = torch.distributions.Categorical(x)
-            action = normal.sample()
-            action = torch.squeeze(action, dim=0)
-
-        return action
-
-    def log_pi(self, s, a):
-        x = self(s)
-
-        normal = torch.distributions.Categorical(x)
-        logpi = normal.log_prob(a)
-
-        return logpi                      # [None,]
 class PPO(torch.nn.Module):
     def __init__(self, state_dim, act_dim, act_max, epsilon, device, lr_a=0.001, lr_c=0.001,
                  c_en=0.01, c_vf=0.5, max_grad_norm=False, anneal_lr=False, train_steps=1000,
