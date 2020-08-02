@@ -191,7 +191,7 @@ class ActorDisc(torch.nn.Module):
         )
 
         initialize_weights(self.emb, "orthogonal")
-        initialize_weights(self.mu, "orthogonal")
+        initialize_weights(self.final, "orthogonal")
 
     def forward(self, s):
         emb = self.emb(s)
@@ -220,8 +220,12 @@ class PPO(torch.nn.Module):
                  c_en=0.01, c_vf=0.5, max_grad_norm=False, anneal_lr=False, train_steps=1000,
                  input_type="state"):
         super().__init__()
-        self.actor = Actor(state_dim, act_dim, act_max, input_type=input_type).to(device)
-        self.old_actor = Actor(state_dim, act_dim, act_max, input_type=input_type).to(device)
+        if type(act_dim) == np.int64 or type(act_dim) == np.int:
+            self.actor = ActorDisc(state_dim, act_dim, input_type=input_type).to(device)
+            self.old_actor = ActorDisc(state_dim, act_dim, input_type=input_type).to(device)
+        else:
+            self.actor = Actor(state_dim, act_dim, act_max, input_type=input_type).to(device)
+            self.old_actor = Actor(state_dim, act_dim, act_max, input_type=input_type).to(device)
         self.critic = Critic(state_dim).to(device)
         self.epsilon = epsilon
         self.c_en = c_en
@@ -279,8 +283,8 @@ class PPO(torch.nn.Module):
 
     def train(self, s, a, adv, vs, oldv, is_clip_v=True):
         self.opti.zero_grad()
-        logpi, mu, sigma = self.actor.log_pi(s, a)
-        old_logpi, old_mu, old_sigma = self.old_actor.log_pi(s, a)
+        logpi = self.actor.log_pi(s, a)
+        old_logpi = self.old_actor.log_pi(s, a)
 
         ratio = torch.exp(logpi - old_logpi)
         surr = ratio * adv

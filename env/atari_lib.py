@@ -285,8 +285,8 @@ if __name__ == '__main__':
     env = make_atari("BreakoutNoFrameskip-v4")
     env = wrap_deepmind(env)
     # s = env.reset()
-    # obs = env.observation_space
-    # act = env.action_space
+    obs = env.observation_space
+    act = env.action_space
     #
     # s_ = s
     # env = gym.make("SeaquestNoFrameskip-v4")
