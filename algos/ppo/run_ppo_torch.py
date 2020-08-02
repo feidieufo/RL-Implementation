@@ -224,7 +224,7 @@ if __name__ == '__main__':
     #     env = SubVectorEnv(env)
     # env = CarRacing()
     state_dim = env.observation_space.shape
-    act_dim = env.action_space.shape[0]
+    act_dim = env.action_space.shape
     action_max = env.action_space.high[0]
     ppo = core.PPO(state_dim, act_dim, action_max, 0.2, device, lr_a=args.lr_a,
                    lr_c=args.lr_c, max_grad_norm=args.max_grad_norm,

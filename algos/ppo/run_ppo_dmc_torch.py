@@ -102,6 +102,13 @@ class Identity:
     def __call__(self, x):
         return x
 
+class ImageProcess:
+    def __init__(self, pre_filter):
+        self.pre_filter = pre_filter
+    def __call__(self, x):
+        x = self.pre_filter(x)
+        x = np.array(x).astype(np.float32) / 255.0
+        return x
 
 class RewardFilter:
     def __init__(self, pre_filter, shape, center=True, scale=True, clip=10.0, gamma=0.99):
@@ -270,7 +277,7 @@ if __name__ == '__main__':
     env.seed(args.seed)
 
     state_dim = env.observation_space.shape
-    act_dim = env.action_space.shape[0]
+    act_dim = env.action_space.shape
     action_max = env.action_space.high[0]
     ppo = core.PPO(state_dim, act_dim, action_max, 0.2, device, lr_a=args.lr_a,
                    lr_c=args.lr_c, max_grad_norm=args.max_grad_norm,
@@ -278,6 +285,7 @@ if __name__ == '__main__':
     replay = ReplayBuffer(args.steps)
 
     state_norm = Identity()
+    state_norm = ImageProcess(state_norm)
     reward_norm = Identity()
     if args.norm_state:
         state_norm = AutoNormalization(state_norm, state_dim, clip=5.0)

@@ -172,7 +172,7 @@ class Actor(torch.nn.Module):
         logpi = normal.log_prob(a)
         # logpi = torch.sum(log_prob, dim=1)
 
-        return logpi, mean, std                        # [None,]
+        return logpi                       # [None,]
 
 class ActorDisc(torch.nn.Module):
     def __init__(self, s_dim, a_num, emb_dim=100, input_type="state"):
@@ -224,8 +224,8 @@ class PPO(torch.nn.Module):
             self.actor = ActorDisc(state_dim, act_dim, input_type=input_type).to(device)
             self.old_actor = ActorDisc(state_dim, act_dim, input_type=input_type).to(device)
         else:
-            self.actor = Actor(state_dim, act_dim, act_max, input_type=input_type).to(device)
-            self.old_actor = Actor(state_dim, act_dim, act_max, input_type=input_type).to(device)
+            self.actor = Actor(state_dim, act_dim[0], act_max, input_type=input_type).to(device)
+            self.old_actor = Actor(state_dim, act_dim[0], act_max, input_type=input_type).to(device)
         self.critic = Critic(state_dim).to(device)
         self.epsilon = epsilon
         self.c_en = c_en
