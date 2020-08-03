@@ -2,29 +2,6 @@ import torch
 from torch.distributions import Normal, MultivariateNormal
 import numpy as np
 
-
-class Discriminator(torch.nn.Module):
-    def __init__(self, s_dim, a_dim):
-        self.s_emb = ActorEmb(s_dim)
-        self.a_emb = torch.nn.Sequential(
-            torch.nn.Linear(a_dim, 100)
-        )
-        self.d = torch.nn.Sequential(
-            torch.nn.Linear(100+100, 100),
-            torch.nn.LeakyReLU(0.2),
-            torch.nn.Linear(100, 1),
-            torch.nn.Sigmoid(),
-        )
-
-    def forward(self, s, a):
-        s = self.s_emb(s)
-        a = self.a_emb(a)
-        x = torch.cat([s, a], dim=1)
-        x = self.d(x)
-        return x
-
-
-
 def initialize_weights(mod, initialization_type, scale=1):
     '''
     Weight initializer for the models.
@@ -77,43 +54,15 @@ class ActorCnnEmb(torch.nn.Module):
         x = self.fc(x)
         return x
 
-
-class ActorEmb(torch.nn.Module):
-    def __init__(self, s_dim, emb_dim=100):
-        super().__init__()
-        s_dim = np.prod(s_dim)
-
-        self.fc = torch.nn.Sequential(
-            torch.nn.Linear(s_dim, emb_dim),
-            torch.nn.ReLU(),
-            torch.nn.Linear(emb_dim, emb_dim),
-            torch.nn.ReLU())
-
-
-    def forward(self, s):
-        x = self.fc(s)
-        return x
-
-
 class Critic(torch.nn.Module):
-    def __init__(self, s_dim, emb_dim=100):
+    def __init__(self, s_dim, emb_dim=512):
         super().__init__()
-        # self.emb = torch.nn.Sequential(
-        #     torch.nn.Linear(s_dim, emb_dim),
-        #     torch.nn.ReLU(),
-        #     torch.nn.Linear(emb_dim, emb_dim),
-        #     torch.nn.ReLU())
 
         self.fc = torch.nn.Sequential(
-            torch.nn.Linear(emb_dim, 100),
-            torch.nn.ReLU(),
-            torch.nn.Linear(100, 100),
-            torch.nn.ReLU(),
-            torch.nn.Linear(100, 1),
+            torch.nn.Linear(emb_dim, 1),
         )
 
-        # initialize_weights(self.emb, "orthogonal")
-        initialize_weights(self.fc, "orthogonal")
+        initialize_weights(self.fc, "orthogonal", scale=1)
 
     def forward(self, s_emb):
         # s_emb = self.emb(s_emb)
@@ -122,14 +71,11 @@ class Critic(torch.nn.Module):
 
 
 class Actor(torch.nn.Module):
-    def __init__(self, s_dim, a_dim, a_max=1, emb_dim=100, input_type="state"):
+    def __init__(self, s_dim, a_dim, a_max=1, emb_dim=512):
         super().__init__()
         self.act_dim = a_dim
         self.a_max = a_max
-        if input_type == "state":
-            self.emb = ActorEmb(s_dim)
-        else:
-            self.emb = ActorCnnEmb(s_dim)
+        self.emb = ActorCnnEmb(s_dim)
 
         self.mu = torch.nn.Sequential(
             torch.nn.Linear(emb_dim, 100),
@@ -139,8 +85,8 @@ class Actor(torch.nn.Module):
         )
         self.var = torch.nn.Parameter(torch.tensor(-0.5 * np.ones(a_dim, dtype=np.float32)))
 
-        initialize_weights(self.emb, "orthogonal")
-        initialize_weights(self.mu, "orthogonal")
+        initialize_weights(self.emb, "orthogonal", scale=np.sqrt(2))
+        initialize_weights(self.mu, "orthogonal", scale=0.01)
 
     def forward(self, s):
         emb = self.emb(s)
@@ -173,21 +119,18 @@ class Actor(torch.nn.Module):
         return logpi                       # [None,]
 
 class ActorDisc(torch.nn.Module):
-    def __init__(self, s_dim, a_num, emb_dim=512, input_type="state"):
+    def __init__(self, s_dim, a_num, emb_dim=512):
         super().__init__()
         self.act_num = a_num
-        if input_type == "state":
-            self.emb = ActorEmb(s_dim)
-        else:
-            self.emb = ActorCnnEmb(s_dim)
+        self.emb = ActorCnnEmb(s_dim)
 
         self.final = torch.nn.Sequential(
             torch.nn.Linear(emb_dim, a_num),
             torch.nn.Softmax()
         )
 
-        initialize_weights(self.emb, "orthogonal")
-        initialize_weights(self.final, "orthogonal")
+        initialize_weights(self.emb, "orthogonal", scale=np.sqrt(2))
+        initialize_weights(self.final, "orthogonal", scale=0.01)
 
     def forward(self, s):
         emb = self.emb(s)
@@ -211,17 +154,17 @@ class ActorDisc(torch.nn.Module):
         logpi = normal.log_prob(a)
 
         return logpi                      # [None,]
+
 class PPO(torch.nn.Module):
-    def __init__(self, state_dim, act_dim, act_max, epsilon, device, lr_a=0.001, lr_c=0.001,
-                 c_en=0.01, c_vf=0.5, max_grad_norm=False, anneal_lr=False, train_steps=1000,
-                 input_type="state"):
+    def __init__(self, state_dim, act_dim, act_max, epsilon, device, lr_a=0.001,
+                 c_en=0.01, c_vf=0.5, max_grad_norm=False, anneal_lr=False, train_steps=1000,):
         super().__init__()
         if type(act_dim) == np.int64 or type(act_dim) == np.int:
-            self.actor = ActorDisc(state_dim, act_dim, input_type=input_type).to(device)
-            self.old_actor = ActorDisc(state_dim, act_dim, input_type=input_type).to(device)
+            self.actor = ActorDisc(state_dim, act_dim).to(device)
+            self.old_actor = ActorDisc(state_dim, act_dim).to(device)
         else:
-            self.actor = Actor(state_dim, act_dim[0], act_max, input_type=input_type).to(device)
-            self.old_actor = Actor(state_dim, act_dim[0], act_max, input_type=input_type).to(device)
+            self.actor = Actor(state_dim, act_dim[0], act_max).to(device)
+            self.old_actor = Actor(state_dim, act_dim[0], act_max).to(device)
         self.critic = Critic(state_dim).to(device)
         self.epsilon = epsilon
         self.c_en = c_en
@@ -230,52 +173,11 @@ class PPO(torch.nn.Module):
         self.max_grad_norm = max_grad_norm
         self.anneal_lr = anneal_lr
 
-        self.opti_a = torch.optim.Adam(self.actor.parameters(), lr=lr_a)
-        # self.opti_c = torch.optim.Adam(list(self.critic.parameters()) + list(self.actor.emb.parameters()), lr=lr_c)
-        self.opti_c = torch.optim.Adam(self.critic.parameters(), lr=lr_c)
         self.opti = torch.optim.Adam(list(self.actor.parameters()) + list(self.critic.parameters()), lr=lr_a)
 
         if anneal_lr:
             lam = lambda f: 1 - f / train_steps
             self.opti_scheduler = torch.optim.lr_scheduler.LambdaLR(self.opti, lr_lambda=lam)
-
-    def train_a(self, s, a, adv):
-        self.opti_a.zero_grad()
-
-        logpi, mu, sigma = self.actor.log_pi(s, a)
-        old_logpi, old_mu, old_sigma = self.old_actor.log_pi(s, a)
-
-        ratio = torch.exp(logpi-old_logpi)
-        surr = ratio*adv
-        clip_adv = torch.clamp(ratio, 1 - self.epsilon, 1 + self.epsilon) * adv
-        aloss = -torch.mean(torch.min(surr, clip_adv))
-        loss_entropy = torch.mean(torch.exp(logpi)*logpi)
-        kl = torch.mean(torch.exp(logpi)*(logpi-old_logpi))
-        aloss += self.c_en*loss_entropy
-
-        aloss.backward()
-        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
-        self.opti_a.step()
-
-        info = dict(entropy=loss_entropy, kl=kl)
-        return aloss.item(), info
-
-    def train_v(self, s, vs, oldv, is_clip_v=True):
-        self.opti_c.zero_grad()
-
-        # emb = self.actor.emb(s)
-        v = self.critic(s)
-        v = torch.squeeze(v, 1)
-
-        if not is_clip_v:
-            v_loss = ((v-vs)**2).mean()
-        else:
-            clip_v = oldv + torch.clamp(v-oldv, -self.epsilon, self.epsilon)
-            v_loss = torch.max(((v-vs)**2).mean(), ((clip_v-vs)**2).mean())
-        v_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
-        self.opti_c.step()
-        return v_loss.item()
 
     def train(self, s, a, adv, vs, oldv, is_clip_v=True):
         self.opti.zero_grad()
