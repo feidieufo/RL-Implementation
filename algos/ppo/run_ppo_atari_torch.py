@@ -166,9 +166,9 @@ class ReplayBuffer:
         adv = reward + self.gamma * v_ - v
         adv = discount_cumsum(adv, self.gamma * self.lam)
 
-        reward[-1] = reward[-1] + self.gamma * last_v
-        reward = discount_cumsum(reward, self.gamma)
-        self.reward[path_slice] = reward
+        # reward[-1] = reward[-1] + self.gamma * last_v
+        # reward = discount_cumsum(reward, self.gamma)
+        self.reward[path_slice] = adv + v
 
         self.adv[path_slice] = adv
         self.path_start = self.ptr
@@ -212,6 +212,7 @@ if __name__ == '__main__':
     parser.add_argument('--anneal_lr', default=False)
     parser.add_argument('--debug', default=True)
     parser.add_argument('--log_every', default=10)
+    parser.add_argument('--target_kl', default=0.03, type=float)
     args = parser.parse_args()
 
     device = torch.device("cuda:"+str(args.gpu) if torch.cuda.is_available() else "cpu")
@@ -300,6 +301,10 @@ if __name__ == '__main__':
                     logger.store(vloss=info["vloss"])
                     logger.store(entropy=info["entropy"])
                     logger.store(kl=info["kl"])
+            
+            if logger.get_stats("kl")[0] > args.target_kl:
+                print("stop at:", str(i))
+                break
 
         if args.anneal_lr:
             ppo.lr_scheduler()

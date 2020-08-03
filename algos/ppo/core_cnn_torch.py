@@ -99,11 +99,9 @@ class Actor(torch.nn.Module):
             mean, var = self(s)
             std = torch.exp(var)
 
-            covariance = torch.diag(std, diagonal=0)
-            normal = MultivariateNormal(mean, covariance**2)
+            normal = Normal(mean, std)
             action = normal.sample()                  # [1, a_dim]
             action = torch.squeeze(action, dim=0)     # [a_dim]
-            # action = torch.clamp(action, min=-2, max=2)
 
         return action
 
@@ -111,10 +109,9 @@ class Actor(torch.nn.Module):
         mean, var = self(s)
         std = torch.exp(var)
 
-        covariance = torch.diag(std, diagonal=0)
-        normal = MultivariateNormal(mean, covariance**2)
+        normal = Normal(mean, std)
         logpi = normal.log_prob(a)
-        # logpi = torch.sum(log_prob, dim=1)
+        logpi = torch.sum(logpi, dim=1)
 
         return logpi                       # [None,]
 

@@ -125,7 +125,7 @@ class RewardFilter:
         x = self.pre_filter(x)
         self.ret = self.ret*self.gamma + x
         self.rs.push(self.ret)
-        x = self.ret/self.rs.std
+        x = self.ret/(self.rs.std + 1e-8)
         if self.clip:
             x = np.clip(x, -self.clip, self.clip)
         return x
@@ -189,15 +189,15 @@ class ReplayBuffer:
         adv = reward + self.gamma * v_ - v
         adv = discount_cumsum(adv, self.gamma * self.lam)
 
-        reward[-1] = reward[-1] + self.gamma * last_v
-        reward = discount_cumsum(reward, self.gamma)
-        self.reward[path_slice] = reward
+        # reward[-1] = reward[-1] + self.gamma * last_v
+        # reward = discount_cumsum(reward, self.gamma)
+        self.reward[path_slice] = adv + v 
 
         self.adv[path_slice] = adv
         self.path_start = self.ptr
 
     def get(self):
-        self.adv = (self.adv - np.mean(self.adv))/np.std(self.adv)
+        self.adv = (self.adv - np.mean(self.adv))/(np.std(self.adv) + 1e-8)
         # self.reward = (self.reward - np.mean(self.reward))/np.std(self.reward)
 
 
@@ -229,7 +229,7 @@ if __name__ == '__main__':
     parser.add_argument('--lam', default=0.95)
     parser.add_argument('--a_update', default=10)
     parser.add_argument('--c_update', default=10)
-    parser.add_argument('--lr_a', default=4e-4)
+    parser.add_argument('--lr_a', default=2.5e-4)
     parser.add_argument('--lr_c', default=1e-3)
     parser.add_argument('--log', type=str, default="logs")
     parser.add_argument('--steps', default=3000, type=int)
@@ -246,12 +246,8 @@ if __name__ == '__main__':
     parser.add_argument('--debug', default=True)
     parser.add_argument('--log_every', default=10)
     parser.add_argument('--network', default="cnn")
+    parser.add_argument('--target_kl', default=0.03, type=float)
     args = parser.parse_args()
-
-    if args.network == "cnn" or args.encoder_type == 'state':
-        import algos.ppo.core_torch as core
-    elif args.network == "resnet":
-        import algos.ppo.core_resnet_simple_torch as core
 
     device = torch.device("cuda:"+str(args.gpu) if torch.cuda.is_available() else "cpu")
 
@@ -279,9 +275,18 @@ if __name__ == '__main__':
     state_dim = env.observation_space.shape
     act_dim = env.action_space.shape
     action_max = env.action_space.high[0]
-    ppo = core.PPO(state_dim, act_dim, action_max, 0.2, device, lr_a=args.lr_a,
-                   lr_c=args.lr_c, max_grad_norm=args.max_grad_norm,
-                   anneal_lr=args.anneal_lr, train_steps=args.iteration, input_type=args.encoder_type)
+    if args.network == "cnn":
+        import algos.ppo.core_cnn_torch as core
+        ppo = core.PPO(state_dim, act_dim, action_max, 0.2, device, lr_a=args.lr_a,
+                       max_grad_norm=args.max_grad_norm,
+                       anneal_lr=args.anneal_lr, train_steps=args.iteration)
+    elif args.network == "resnet":
+        import algos.ppo.core_resnet_simple_torch as core
+    elif args.network == "mlp" or args.encoder_type == 'state':
+        import algos.ppo.core_torch as core
+        ppo = core.PPO(state_dim, act_dim, action_max, 0.2, device, lr_a=args.lr_a,
+                    lr_c=args.lr_c, max_grad_norm=args.max_grad_norm,
+                    anneal_lr=args.anneal_lr, train_steps=args.iteration)
     replay = ReplayBuffer(args.steps)
 
     state_norm = Identity()
@@ -350,6 +355,10 @@ if __name__ == '__main__':
                     logger.store(vloss=info["vloss"])
                     logger.store(entropy=info["entropy"])
                     logger.store(kl=info["kl"])
+
+            if logger.get_stats("kl")[0] > args.target_kl:
+                print("stop at:", str(i))
+                break
 
         if args.anneal_lr:
             ppo.lr_scheduler()

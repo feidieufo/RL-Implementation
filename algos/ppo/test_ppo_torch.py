@@ -1,7 +1,7 @@
 try:
-    import algos.gail.pytorch.core_torch as core
+    import algos.ppo.core_cnn_torch as core
 except Exception:
-    import core_torch as core
+    import core_cnn_torch as core
 
 import numpy as np
 import gym
@@ -12,6 +12,37 @@ from scipy import signal
 import os
 from utils.logx import EpochLogger
 import torch
+import dmc2gym
+from collections import deque
+
+class DMCFrameStack(gym.Wrapper):
+    def __init__(self, env, k):
+        gym.Wrapper.__init__(self, env)
+        self._k = k
+        self._frames = deque([], maxlen=k)
+        shp = env.observation_space.shape
+        self.observation_space = gym.spaces.Box(
+            low=0,
+            high=1,
+            shape=((shp[0] * k,) + shp[1:]),
+            dtype=env.observation_space.dtype
+        )
+        self._max_episode_steps = env._max_episode_steps
+
+    def reset(self):
+        obs = self.env.reset()
+        for _ in range(self._k):
+            self._frames.append(obs)
+        return self._get_obs()
+
+    def step(self, action):
+        obs, reward, done, info = self.env.step(action)
+        self._frames.append(obs)
+        return self._get_obs(), reward, done, info
+
+    def _get_obs(self):
+        assert len(self._frames) == self._k
+        return np.concatenate(list(self._frames), axis=0)
 
 class RunningStat:  # for class AutoNormalization
     def __init__(self, shape):
@@ -105,14 +136,33 @@ class AutoNormalization:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--exp_name', default="ppo_hopper_clipv_maxgrad")
-    parser.add_argument('--seed', default=0)
-    parser.add_argument('--norm_state', default=True)
+    parser.add_argument('--domain_name', default='cheetah')
+    parser.add_argument('--task_name', default='run')
+    parser.add_argument('--image_size', default=84, type=int)
+    parser.add_argument('--action_repeat', default=1, type=int)
+    parser.add_argument('--frame_stack', default=3, type=int)
+    parser.add_argument('--encoder_type', default='pixel', type=str)
+
+    parser.add_argument('--exp_name', default="ppo_cheetah_run_clipv_maxgrad_anneallr2.5e-3_stack3_normal_state01")
+    parser.add_argument('--seed', default=10)
+    parser.add_argument('--norm_state', default=False)
     parser.add_argument('--norm_rewards', default=False)
     args = parser.parse_args()
 
-    env = gym.make("Hopper-v2")
-    state_dim = env.observation_space.shape[0]
+    # env = gym.make("Hopper-v2")
+    env = dmc2gym.make(
+        domain_name=args.domain_name,
+        task_name=args.task_name,
+        seed=args.seed,
+        visualize_reward=False,
+        from_pixels=(args.encoder_type == 'pixel'),
+        height=args.image_size,
+        width=args.image_size,
+        frame_skip=args.action_repeat
+    )
+    if args.encoder_type == 'pixel':
+        env = DMCFrameStack(env, k=args.frame_stack)
+    state_dim = env.observation_space.shape
     act_dim = env.action_space.shape[0]
     device = torch.device("cuda:" + str(0) if torch.cuda.is_available() else "cpu")
 
@@ -120,7 +170,7 @@ if __name__ == '__main__':
     logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
 
     actor = core.Actor(state_dim, act_dim).to(device)
-    checkpoint = torch.load(os.path.join(logger_kwargs["output_dir"], "checkpoints", str(300) + '.pth'))
+    checkpoint = torch.load(os.path.join(logger_kwargs["output_dir"], "checkpoints", str(900) + '.pth'))
     actor.load_state_dict(checkpoint["actor"])
 
     state_norm = Identity()
@@ -136,10 +186,11 @@ if __name__ == '__main__':
     rew_list = []
     epi = 0
     while True:
-        env.render()
+        # env.render()
         state_tensor = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
         a, var = actor(state_tensor)
-        a = torch.squeeze(a, 1).detach().cpu().numpy()
+        logpi = actor.log_pi(state_tensor, a)
+        a = torch.squeeze(a, 0).detach().cpu().numpy()
         obs, r, d, _ = env.step(a)
 
         rew += r

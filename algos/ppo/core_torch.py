@@ -24,7 +24,6 @@ class Discriminator(torch.nn.Module):
         return x
 
 
-
 def initialize_weights(mod, initialization_type, scale=1):
     '''
     Weight initializer for the models.
@@ -45,38 +44,6 @@ def initialize_weights(mod, initialization_type, scale=1):
                 p.data.zero_()
         else:
             raise ValueError("Need a valid initialization key")
-
-
-class ActorCnnEmb(torch.nn.Module):
-    def __init__(self, s_dim, emb_dim=512):
-        super().__init__()
-        self.cnn = torch.nn.Sequential(
-            torch.nn.Conv2d(s_dim[0], 32, kernel_size=8, stride=4),
-            torch.nn.ReLU(),
-            torch.nn.Conv2d(32, 64, kernel_size=4, stride=2),
-            torch.nn.ReLU(),
-            torch.nn.Conv2d(64, 64, kernel_size=1, stride=1),
-            torch.nn.ReLU(),
-        )
-
-        h = self.conv2d_size_out(self.conv2d_size_out(
-            self.conv2d_size_out(s_dim[1], kernel_size=8, stride=4), 4, 2), 1, 1)
-        w = self.conv2d_size_out(self.conv2d_size_out(
-            self.conv2d_size_out(s_dim[2], kernel_size=8, stride=4), 4, 2), 1, 1)
-
-        self.fc = torch.nn.Sequential(
-            torch.nn.Linear(h*w*64, emb_dim),
-            torch.nn.ReLU(),)
-
-    def conv2d_size_out(self, size, kernel_size=5, stride=2):
-        return (size - (kernel_size - 1) - 1) // stride + 1
-
-    def forward(self, s):
-        cnn = self.cnn(s)
-        x = cnn.view(s.shape[0], -1)
-        x = self.fc(x)
-        return x
-
 
 class ActorEmb(torch.nn.Module):
     def __init__(self, s_dim, emb_dim=100):
@@ -122,14 +89,11 @@ class Critic(torch.nn.Module):
 
 
 class Actor(torch.nn.Module):
-    def __init__(self, s_dim, a_dim, a_max=1, emb_dim=100, input_type="state"):
+    def __init__(self, s_dim, a_dim, a_max=1, emb_dim=100):
         super().__init__()
         self.act_dim = a_dim
         self.a_max = a_max
-        if input_type == "state":
-            self.emb = ActorEmb(s_dim)
-        else:
-            self.emb = ActorCnnEmb(s_dim)
+        self.emb = ActorEmb(s_dim)
 
         self.mu = torch.nn.Sequential(
             torch.nn.Linear(emb_dim, 100),
@@ -173,13 +137,10 @@ class Actor(torch.nn.Module):
         return logpi                       # [None,]
 
 class ActorDisc(torch.nn.Module):
-    def __init__(self, s_dim, a_num, emb_dim=512, input_type="state"):
+    def __init__(self, s_dim, a_num, emb_dim=512):
         super().__init__()
         self.act_num = a_num
-        if input_type == "state":
-            self.emb = ActorEmb(s_dim)
-        else:
-            self.emb = ActorCnnEmb(s_dim)
+        self.emb = ActorEmb(s_dim)
 
         self.final = torch.nn.Sequential(
             torch.nn.Linear(emb_dim, a_num),
@@ -213,15 +174,14 @@ class ActorDisc(torch.nn.Module):
         return logpi                      # [None,]
 class PPO(torch.nn.Module):
     def __init__(self, state_dim, act_dim, act_max, epsilon, device, lr_a=0.001, lr_c=0.001,
-                 c_en=0.01, c_vf=0.5, max_grad_norm=False, anneal_lr=False, train_steps=1000,
-                 input_type="state"):
+                 c_en=0.01, c_vf=0.5, max_grad_norm=False, anneal_lr=False, train_steps=1000):
         super().__init__()
         if type(act_dim) == np.int64 or type(act_dim) == np.int:
-            self.actor = ActorDisc(state_dim, act_dim, input_type=input_type).to(device)
-            self.old_actor = ActorDisc(state_dim, act_dim, input_type=input_type).to(device)
+            self.actor = ActorDisc(state_dim, act_dim).to(device)
+            self.old_actor = ActorDisc(state_dim, act_dim).to(device)
         else:
-            self.actor = Actor(state_dim, act_dim[0], act_max, input_type=input_type).to(device)
-            self.old_actor = Actor(state_dim, act_dim[0], act_max, input_type=input_type).to(device)
+            self.actor = Actor(state_dim, act_dim[0], act_max).to(device)
+            self.old_actor = Actor(state_dim, act_dim[0], act_max).to(device)
         self.critic = Critic(state_dim).to(device)
         self.epsilon = epsilon
         self.c_en = c_en
