@@ -1,7 +1,4 @@
-try:
-    import algos.ppo.core_cnn_torch as core
-except Exception:
-    import core_cnn_torch as core
+import algos.ppo.core_cnn_torch as core
 
 import numpy as np
 import gym
@@ -14,6 +11,7 @@ from utils.logx import EpochLogger
 import torch
 import dmc2gym
 from collections import deque
+import pickle
 from env.dmc_env import DMCFrameStack
 
 class RunningStat:  # for class AutoNormalization
@@ -55,7 +53,7 @@ class RunningStat:  # for class AutoNormalization
 
 
 class Identity:
-    def __call__(self, x):
+    def __call__(self, x, update=True):
         return x
 
 class ImageProcess:
@@ -77,10 +75,11 @@ class RewardFilter:
         self.rs = RunningStat(shape)
         self.ret = np.zeros(shape)
 
-    def __call__(self, x):
+    def __call__(self, x, update=True):
         x = self.pre_filter(x)
         self.ret = self.ret*self.gamma + x
-        self.rs.push(self.ret)
+        if update:
+            self.rs.push(self.ret)
         x = self.ret/self.rs.std
         if self.clip:
             x = np.clip(x, -self.clip, self.clip)
@@ -122,10 +121,11 @@ if __name__ == '__main__':
     parser.add_argument('--frame_stack', default=3, type=int)
     parser.add_argument('--encoder_type', default='pixel', type=str)
 
-    parser.add_argument('--exp_name', default="ppo_cheetah_run_clipv_maxgrad_anneallr2.5e-3_stack3_normal_state01")
+    parser.add_argument('--exp_name', default="ppo_cheetah_run_clipv_maxgrad_anneallr2.5e-3_stack3_normal_state01_maxkl0.03_gae")
     parser.add_argument('--seed', default=10)
     parser.add_argument('--norm_state', default=False)
     parser.add_argument('--norm_rewards', default=False)
+    parser.add_argument('--expert_num', default=10, type=int)
     parser.add_argument('--check_num', default=900, type=int)
     args = parser.parse_args()
 
@@ -163,29 +163,47 @@ if __name__ == '__main__':
         if args.norm_rewards:
             reward_norm = pickle.load(f)["reward"]
 
+    expert_data_file = os.path.join(logger_kwargs["output_dir"], "experts")
+    if not os.path.exists(expert_data_file):
+        os.mkdir(expert_data_file)
+    expert_data = {"obs":[], "action":[]}
+
     obs = env.reset()
-    obs = state_norm(obs)
+    state = state_norm(obs, update=False)
     rew = 0
     rew_list = []
     epi = 0
-    while True:
+    while epi <= args.expert_num:
         # env.render()
-        state_tensor = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
-        a, var = actor(state_tensor)
-        logpi = actor.log_pi(state_tensor, a)
+        expert_data["obs"].append(obs)
+        state_tensor = torch.tensor(state, dtype=torch.float32, device=device).unsqueeze(0)
+        # a, var = actor(state_tensor)
+        a = actor.select_action(state_tensor)
+        # pi = actor.log_pi(state_tensor, a)
         a = torch.squeeze(a, 0).detach().cpu().numpy()
+        a = np.clip(a, -1, 1)
+        expert_data["action"].append(a)
         obs, r, d, _ = env.step(a)
 
         rew += r
         if d:
             rew_list.append(rew)
             epi += 1
-            # print("reward", rew)
+            print("reward", rew)
 
-            if epi % 10 == 0:
-                print("teset_", np.mean(rew_list))
-                rew_list = []
+            # if epi % 10 == 0:
+            #     print("teset_", np.mean(rew_list))
+            #     rew_list = []
             obs = env.reset()
             rew = 0
 
-        obs = state_norm(obs)
+        state = state_norm(obs, update=False)
+    
+    expert_data["obs"] = np.array(expert_data["obs"])
+    expert_data["action"] = np.array(expert_data["action"])
+
+    with open(os.path.join(expert_data_file, 
+        args.domain_name + "_" + args.task_name + "_epoch" + str(args.expert_num) + ".pkl"), "wb") as f:
+        pickle.dump(expert_data, f)
+
+
