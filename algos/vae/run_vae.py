@@ -11,6 +11,7 @@ import os
 from utils.logx import EpochLogger
 from torch.utils.tensorboard import SummaryWriter
 import numpy as np
+import json
 
 class ExpertDataset(Dataset):
     def __init__(self, data, device):
@@ -20,8 +21,8 @@ class ExpertDataset(Dataset):
     def __getitem__(self, item):
         expert = {}
 
-        expert["obs"] = torch.tensor(self.data["obs"][item], dtype=torch.float32).to(self.device)
-        expert["action"] = torch.tensor(self.data["action"][item], dtype=torch.float32).to(self.device)
+        expert["obs"] = torch.tensor(self.data["obs"][item], dtype=torch.float32)
+        expert["action"] = torch.tensor(self.data["action"][item], dtype=torch.float32)
 
         return expert
 
@@ -57,10 +58,12 @@ if __name__ == "__main__":
     parser.add_argument('--encoder_lr', default=1e-3, type=float)
     parser.add_argument('--decoder_lr', default=1e-3, type=float)
     parser.add_argument('--decoder_latent_lambda', default=1e-6, type=float)
+    parser.add_argument('--decoder_weight_lambda', default=1e-7, type=float)
     parser.add_argument('--epoch', default=1000, type=int)
     parser.add_argument('--out_dir', default="vae_test")
     parser.add_argument('--log_every', default=10, type=int)
     parser.add_argument('--feature_dim', default=50, type=int)
+    parser.add_argument('--num_workers', default=8, type=int)
     args = parser.parse_args()
 
     device = torch.device("cuda:"+str(args.gpu) if torch.cuda.is_available() else "cpu")
@@ -93,20 +96,23 @@ if __name__ == "__main__":
     out_kwargs = setup_logger_kwargs(args.out_dir, args.seed)
     logger = EpochLogger(**out_kwargs)
     writer = SummaryWriter(os.path.join(logger.output_dir, "logs"))
+    with open(os.path.join(logger.output_dir, 'args.json'), 'w') as f:
+        json.dump(vars(args), f, sort_keys=True, indent=4)
     if not os.path.exists(os.path.join(logger.output_dir, "checkpoints")):
         os.makedirs(os.path.join(logger.output_dir, "checkpoints"))
 
     encoder = PixelEncoder(state_dim, args.feature_dim, num_layers=4).to(device)
     decoder = PixelDecoder(state_dim, args.feature_dim, num_layers=4).to(device)
     encoder_optimizer = torch.optim.Adam(encoder.parameters(), lr=args.encoder_lr)
-    decoder_optimizer = torch.optim.Adam(decoder.parameters(), lr=args.decoder_lr)
+    decoder_optimizer = torch.optim.Adam(decoder.parameters(), lr=args.decoder_lr, weight_decay=args.decoder_weight_lambda)
 
     expert_dataset = ExpertDataset(expert_data, device=device)
-    expert_loader = torch.utils.data.DataLoader(expert_dataset, batch_size=args.batch, shuffle=True)
+    expert_loader = torch.utils.data.DataLoader(expert_dataset, 
+                    batch_size=args.batch, shuffle=True, num_workers=args.num_workers)
     
     for iter in range(args.epoch):
         for expert in expert_loader:
-            obs = expert["obs"]
+            obs = expert["obs"].to(device)
             h = encoder(obs)
             rec_obs = decoder(h)
 

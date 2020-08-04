@@ -1,20 +1,23 @@
-try:
-    import algos.ppo.core_torch as core
-except Exception:
-    import core_torch as core
-
 import numpy as np
 import gym
 import argparse
 import scipy
 from scipy import signal
 import pickle
+from collections import deque
 
 import os
 from utils.logx import EpochLogger
 import torch
 from torch.utils.tensorboard import SummaryWriter
+import dmc2gym
+import env.atari_lib as atari
+from env.dmc_env import DMCFrameStack
 from utils.normalization import *
+import json
+
+from algos.vae.encoder import PixelEncoder
+from algos.vae.decoder import PixelDecoder
 
 def discount_cumsum(x, discount):
     """
@@ -65,15 +68,15 @@ class ReplayBuffer:
         adv = reward + self.gamma * v_ - v
         adv = discount_cumsum(adv, self.gamma * self.lam)
 
-        reward[-1] = reward[-1] + self.gamma * last_v
-        reward = discount_cumsum(reward, self.gamma)
-        self.reward[path_slice] = reward
+        # reward[-1] = reward[-1] + self.gamma * last_v
+        # reward = discount_cumsum(reward, self.gamma)
+        self.reward[path_slice] = adv + v 
 
         self.adv[path_slice] = adv
         self.path_start = self.ptr
 
     def get(self):
-        self.adv = (self.adv - np.mean(self.adv))/np.std(self.adv)
+        self.adv = (self.adv - np.mean(self.adv))/(np.std(self.adv) + 1e-8)
         # self.reward = (self.reward - np.mean(self.reward))/np.std(self.reward)
 
 
@@ -89,24 +92,39 @@ class ReplayBuffer:
             pos = indices[idx:(idx + batch)]
             yield (state[pos], action[pos], self.reward[pos], self.adv[pos], self.v[pos])
 
+class ImageEncodeProcess:
+    def __init__(self, pre_filter):
+        self.pre_filter = pre_filter
+    def __call__(self, x):
+        x = self.pre_filter(x)
+        x = np.array(x).astype(np.float32)
+        x = torch.tensor(x, device=device).unsqueeze(0)
+        x = encoder(x).detach()
+        return x
 
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
+    parser.add_argument('--domain_name', default='cheetah')
+    parser.add_argument('--task_name', default='run')
+    parser.add_argument('--image_size', default=84, type=int)
+    parser.add_argument('--action_repeat', default=1, type=int)
+    parser.add_argument('--frame_stack', default=3, type=int)
+    parser.add_argument('--encoder_type', default='pixel', type=str)
+
     parser.add_argument('--iteration', default=int(1e3), type=int)
     parser.add_argument('--gamma', default=0.99)
     parser.add_argument('--lam', default=0.95)
     parser.add_argument('--a_update', default=10)
     parser.add_argument('--c_update', default=10)
-    parser.add_argument('--lr_a', default=4e-4)
+    parser.add_argument('--lr_a', default=2.5e-4)
     parser.add_argument('--lr_c', default=1e-3)
     parser.add_argument('--log', type=str, default="logs")
     parser.add_argument('--steps', default=3000, type=int)
     parser.add_argument('--gpu', default=0)
-    parser.add_argument('--env', default="Pendulum-v0")
     parser.add_argument('--env_num', default=4, type=int)
-    parser.add_argument('--exp_name', default="ppo_Pendulum")
-    parser.add_argument('--seed', default=0, type=int)
+    parser.add_argument('--exp_name', default="ppo_vae_cheetah_run")
+    parser.add_argument('--seed', default=10, type=int)
     parser.add_argument('--batch', default=50)
     parser.add_argument('--norm_state', default=False)
     parser.add_argument('--norm_rewards', default=False)
@@ -115,6 +133,11 @@ if __name__ == '__main__':
     parser.add_argument('--anneal_lr', default=False)
     parser.add_argument('--debug', default=True)
     parser.add_argument('--log_every', default=10)
+    parser.add_argument('--network', default="cnn")
+    parser.add_argument('--feature_dim', default=50, type=int)
+    parser.add_argument('--target_kl', default=0.03, type=float)
+    parser.add_argument('--encoder_dir', default="vae_2")
+    parser.add_argument('--encoder_check', default=300, type=int)
     args = parser.parse_args()
 
     device = torch.device("cuda:"+str(args.gpu) if torch.cuda.is_available() else "cpu")
@@ -122,25 +145,44 @@ if __name__ == '__main__':
     from utils.run_utils import setup_logger_kwargs
     logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
     logger = EpochLogger(**logger_kwargs)
+    with open(os.path.join(logger.output_dir, 'args.json'), 'w') as f:
+        json.dump(vars(args), f, sort_keys=True, indent=4)
     writer = SummaryWriter(os.path.join(logger.output_dir, "logs"))
 
-    env = gym.make(args.env)
+    env = dmc2gym.make(
+        domain_name=args.domain_name,
+        task_name=args.task_name,
+        seed=args.seed,
+        visualize_reward=False,
+        from_pixels=(args.encoder_type == 'pixel'),
+        height=args.image_size,
+        width=args.image_size,
+        frame_skip=args.action_repeat
+    )
+    if args.encoder_type == 'pixel':
+        env = DMCFrameStack(env, k=args.frame_stack)
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     env.seed(args.seed)
-    # if args.env_num > 1:
-    #     env = [env for _ in range(args.env_num)]
-    #     env = SubVectorEnv(env)
-    # env = CarRacing()
+
     state_dim = env.observation_space.shape
     act_dim = env.action_space.shape
     action_max = env.action_space.high[0]
-    ppo = core.PPO(state_dim, act_dim, action_max, 0.2, device, lr_a=args.lr_a,
-                   lr_c=args.lr_c, max_grad_norm=args.max_grad_norm,
-                   anneal_lr=args.anneal_lr, train_steps=args.iteration)
+    if args.network == "cnn":
+        import algos.vae.core_vae as core
+        ppo = core.PPO(state_dim, act_dim, action_max, 0.2, device, lr_a=args.lr_a,
+                       max_grad_norm=args.max_grad_norm,
+                       anneal_lr=args.anneal_lr, train_steps=args.iteration)
+
     replay = ReplayBuffer(args.steps)
+    encoder = PixelEncoder(state_dim, args.feature_dim, num_layers=4).to(device)
+    encoder_kwargs = setup_logger_kwargs(args.encoder_dir, args.seed)
+    encoder_file = os.path.join(encoder_kwargs["output_dir"], "checkpoints", str(args.encoder_check) + ".pth")
+    check = torch.load(encoder_file)
+    encoder.load_state_dict(check["encoder"])
 
     state_norm = Identity()
+    state_norm = ImageEncodeProcess(state_norm)
     reward_norm = Identity()
     if args.norm_state:
         state_norm = AutoNormalization(state_norm, state_dim, clip=5.0)
@@ -157,25 +199,23 @@ if __name__ == '__main__':
         rew = 0
 
         for step in range(args.steps):
-            state_tensor = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
-            a_tensor = ppo.actor.select_action(state_tensor)
+            a_tensor = ppo.actor.select_action(obs)
             a = a_tensor.detach().cpu().numpy()
+            a = np.clip(a, -1, 1)
             obs_, r, done, _ = env.step(a)
             obs_ = state_norm(obs_)
             rew += r
             r = reward_norm(r)
 
-
-            v_pred = ppo.getV(state_tensor)
-            replay.add(obs, a, v_pred.detach().cpu().numpy(), r)
+            v_pred = ppo.getV(obs)
+            replay.add(obs.cpu().numpy()[0], a, v_pred.detach().cpu().numpy(), r)
 
             obs = obs_
             if done or step == args.steps-1:
                 if done:
                     replay.finish_path(0)
                 else:
-                    state_tensor = torch.tensor(obs_, dtype=torch.float32, device=device).unsqueeze(0)
-                    last_v = ppo.getV(state_tensor)
+                    last_v = ppo.getV(obs_)
                     replay.finish_path(last_v.detach().cpu().numpy())
 
                 rewards.append(rew)
@@ -188,36 +228,6 @@ if __name__ == '__main__':
         replay.get()
         writer.add_scalar("reward", logger.get_stats("reward")[0], global_step=iter)
         writer.add_histogram("action", np.array(replay.action), global_step=iter)
-
-        # for i in range(args.a_update):
-        #     for (s, a, r, adv, v) in replay.get_batch():
-        #         s_tensor = torch.tensor(s, dtype=torch.float32, device=device)
-        #         a_tensor = torch.tensor(a, dtype=torch.float32, device=device)
-        #         adv_tensor = torch.tensor(adv, dtype=torch.float32, device=device)
-        #
-        #         a_loss, info = ppo.train_a(s_tensor, a_tensor, adv_tensor)
-        #         logger.store(a_loss=a_loss)
-        #     #
-        #     #     if info["kl"]>0.3:
-        #     #         print("early stop in iter", iter, " :", i)
-        #     #         break
-        #     #
-        #     # if info["kl"] > 0.3:
-        #     #     break
-        #     writer.add_scalar("entropy", info["entropy"], global_step=iter*args.a_update+i)
-        #     writer.add_scalar("kl", info["kl"], global_step=iter * args.a_update + i)
-        # writer.add_scalar("aloss", a_loss, global_step=iter)
-        #
-        # for i in range(args.c_update):
-        #     for (s, a, r, adv, v) in replay.get_batch():
-        #         s_tensor = torch.tensor(s, dtype=torch.float32, device=device)
-        #         r_tensor = torch.tensor(r, dtype=torch.float32, device=device)
-        #         v_tensor = torch.tensor(v, dtype=torch.float32, device=device)
-        #
-        #         vloss = ppo.train_v(s_tensor, r_tensor, v_tensor)
-        #         logger.store(v_loss=vloss)
-        #
-        # writer.add_scalar("vloss", vloss, global_step=iter)
 
         for i in range(args.a_update):
             for (s, a, r, adv, v) in replay.get_batch(batch=args.batch):
@@ -234,6 +244,10 @@ if __name__ == '__main__':
                     logger.store(vloss=info["vloss"])
                     logger.store(entropy=info["entropy"])
                     logger.store(kl=info["kl"])
+
+            if logger.get_stats("kl")[0] > args.target_kl:
+                print("stop at:", str(i))
+                break
 
         if args.anneal_lr:
             ppo.lr_scheduler()
