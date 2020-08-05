@@ -14,24 +14,75 @@ import dmc2gym
 import env.atari_lib as atari
 from env.dmc_env import DMCFrameStack
 from utils.normalization import *
+from algos.ppo.utils import discount_path, get_path_indices
 
-def discount_cumsum(x, discount):
-    """
-    magic from rllab for computing discounted cumulative sums of vectors.
+class ReplayBuffer:
+    def __init__(self, size, state_dim, act_dim, gamma=0.99, lam=0.95, is_gae=True):
+        self.size = size
+        self.state_dim = state_dim
+        self.act_dim = act_dim
+        self.gamma = gamma
+        self.lam = lam
+        self.is_gae = is_gae
+        self.reset()
 
-    input:
-        vector x,
-        [x0,
-         x1,
-         x2]
+    def reset(self):
+        self.state = np.zeros((self.size,) + self.state_dim, np.float32)
+        if type(self.act_dim) == np.int64 or type(self.act_dim) == np.int:
+            self.action = np.zeros((self.size, ), np.int32)
+        else:
+            self.action = np.zeros((self.size,) + self.act_dim, np.float32)
+        self.v = np.zeros((self.size, ), np.float32)
+        self.reward = np.zeros((self.size, ), np.float32)
+        self.adv = np.zeros((self.size, ), np.float32)
+        self.mask = np.zeros((self.size, ), np.float32)
+        self.ptr, self.path_start = 0, 0
 
-    output:
-        [x0 + discount * x1 + discount^2 * x2,
-         x1 + discount * x2,
-         x2]
-    """
-    return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
+    def add(self, s, a, r, mask):
+        if self.ptr < self.size:
+            self.state[self.ptr] = s
+            self.action[self.ptr] = a
+            self.reward[self.ptr] = r
+            self.mask[self.ptr] = mask
+            self.ptr += 1
 
+    def update_v(self, v, pos):
+        self.v[pos] = v
+
+    def finish_path(self):
+        """
+          Calculate GAE advantage, discounted returns, and
+          true reward (average reward per trajectory)
+
+          GAE: delta_t^V = r_t + discount * V(s_{t+1}) - V(s_t)
+          using formula from John Schulman's code:
+          V(s_t+1) = {0 if s_t is terminal
+                   {v_s_{t+1} if s_t not terminal and t != T (last step)
+                   {v_s if s_t not terminal and t == T
+          """
+        v_ = np.concatenate([self.v[1:], self.v[-1:]], axis=0) * self.mask
+        adv = self.reward + self.gamma * v_ - self.v
+
+        indices = get_path_indices(self.mask)
+
+        for (start, end) in indices:
+            self.adv[start:end] = discount_path(adv[start:end], self.gamma * self.lam)
+            if not self.is_gae:
+                self.reward[start:end] = discount_path(self.reward[start:end], self.gamma)
+        if self.is_gae:
+            self.reward = self.adv + self.v
+
+        self.adv = (self.adv - np.mean(self.adv))/np.std(self.adv)
+
+    def get_batch(self, batch=100, shuffle=True):
+        if shuffle:
+            indices = np.random.permutation(self.size)
+        else:
+            indices = np.arange(self.size)
+
+        for idx in np.arange(0, self.size, batch):
+            pos = indices[idx:(idx + batch)]
+            yield (self.state[pos], self.action[pos], self.reward[pos], self.adv[pos], self.v[pos])
 
 
 if __name__ == '__main__':
@@ -48,9 +99,7 @@ if __name__ == '__main__':
     parser.add_argument('--gamma', default=0.99)
     parser.add_argument('--lam', default=0.95)
     parser.add_argument('--a_update', default=10)
-    parser.add_argument('--c_update', default=10)
-    parser.add_argument('--lr_a', default=2.5e-4)
-    parser.add_argument('--lr_c', default=1e-3)
+    parser.add_argument('--lr', default=3e-4)
     parser.add_argument('--log', type=str, default="logs")
     parser.add_argument('--steps', default=3000, type=int)
     parser.add_argument('--gpu', default=0)
@@ -61,6 +110,7 @@ if __name__ == '__main__':
     parser.add_argument('--norm_state', default=False)
     parser.add_argument('--norm_rewards', default=False)
     parser.add_argument('--is_clip_v', default=True)
+    parser.add_argument('--is_gae', default=True)
     parser.add_argument('--max_grad_norm', default=False)
     parser.add_argument('--anneal_lr', default=False)
     parser.add_argument('--debug', default=True)
@@ -74,6 +124,8 @@ if __name__ == '__main__':
     from utils.run_utils import setup_logger_kwargs
     logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
     logger = EpochLogger(**logger_kwargs)
+    with open(os.path.join(logger.output_dir, 'args.json'), 'w') as f:
+        json.dump(vars(args), f, sort_keys=True, indent=4)
     writer = SummaryWriter(os.path.join(logger.output_dir, "logs"))
 
     env = dmc2gym.make(
@@ -97,31 +149,27 @@ if __name__ == '__main__':
     action_max = env.action_space.high[0]
     if args.network == "cnn":
         import algos.ppo.core_cnn_torch as core
-        ppo = core.PPO(state_dim, act_dim, action_max, 0.2, device, lr_a=args.lr_a,
-                       max_grad_norm=args.max_grad_norm,
-                       anneal_lr=args.anneal_lr, train_steps=args.iteration)
     elif args.network == "resnet":
         import algos.ppo.core_resnet_simple_torch as core
     elif args.network == "mlp" or args.encoder_type == 'state':
         import algos.ppo.core_torch as core
-        ppo = core.PPO(state_dim, act_dim, action_max, 0.2, device, lr_a=args.lr_a,
-                    lr_c=args.lr_c, max_grad_norm=args.max_grad_norm,
-                    anneal_lr=args.anneal_lr, train_steps=args.iteration)
-    replay = ReplayBuffer(args.steps)
+    ppo = core.PPO(state_dim, act_dim, action_max, 0.2, device, lr_a=args.lr,
+                max_grad_norm=args.max_grad_norm,
+                anneal_lr=args.anneal_lr, train_steps=args.iteration)
+    replay = ReplayBuffer(args.steps, state_dim, act_dim, is_gae=args.is_gae)
 
     state_norm = Identity()
     state_norm = ImageProcess(state_norm)
     reward_norm = Identity()
     if args.norm_state:
-        state_norm = AutoNormalization(state_norm, state_dim, clip=5.0)
+        state_norm = AutoNormalization(state_norm, state_dim, clip=10.0)
     if args.norm_rewards == "rewards":
-        reward_norm = AutoNormalization(reward_norm, (), clip=5.0)
+        reward_norm = AutoNormalization(reward_norm, (), clip=10.0)
     elif args.norm_rewards == "returns":
-        reward_norm = RewardFilter(reward_norm, (), clip=5.0)
+        reward_norm = RewardFilter(reward_norm, (), clip=10.0)
 
     for iter in range(args.iteration):
         replay.reset()
-        rewards = []
         obs = env.reset()
         obs = state_norm(obs)
         rew = 0
@@ -130,33 +178,33 @@ if __name__ == '__main__':
             state_tensor = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
             a_tensor = ppo.actor.select_action(state_tensor)
             a = a_tensor.detach().cpu().numpy()
-            a = np.clip(a, -1, 1)
             obs_, r, done, _ = env.step(a)
             obs_ = state_norm(obs_)
             rew += r
             r = reward_norm(r)
+            mask = 1-done
 
-
-            v_pred = ppo.getV(state_tensor)
-            replay.add(obs, a, v_pred.detach().cpu().numpy(), r)
+            replay.add(obs, a, r, mask)
 
             obs = obs_
             if done or step == args.steps-1:
-                if done:
-                    replay.finish_path(0)
-                else:
-                    state_tensor = torch.tensor(obs_, dtype=torch.float32, device=device).unsqueeze(0)
-                    last_v = ppo.getV(state_tensor)
-                    replay.finish_path(last_v.detach().cpu().numpy())
-
-                rewards.append(rew)
                 logger.store(reward=rew)
                 rew = 0
                 obs = env.reset()
-                obs = state_norm(obs)
+            obs = state_norm(obs)
+
+        state = replay.state
+        for idx in np.arange(0, state.shape[0], args.batch):
+            if idx + args.batch <= state.shape[0]:
+                pos = np.arange(idx, idx + args.batch)
+            else:
+                pos = np.arange(idx, state.shape[0])
+            s = torch.tensor(state[pos], dtype=torch.float32).to(device)
+            v = ppo.getV(s).detach().cpu().numpy()
+            replay.update_v(v, pos)
+        replay.finish_path()
 
         ppo.update_a()
-        replay.get()
         writer.add_scalar("reward", logger.get_stats("reward")[0], global_step=iter)
         writer.add_histogram("action", np.array(replay.action), global_step=iter)
 

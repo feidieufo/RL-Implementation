@@ -106,7 +106,7 @@ class ReplayBuffer:
                  {v_s_{t+1} if s_t not terminal and t != T (last step)
                  {v_s if s_t not terminal and t == T
         """
-        v_ = np.concatenate([self.v[:, :-1], self.v[:, -1:]], axis=1)*self.mask
+        v_ = np.concatenate([self.v[:, 1:], self.v[:, -1:]], axis=1)*self.mask
         adv = self.reward + self.gamma*v_ -self.v
 
         indices = get_path_indices(self.mask)
