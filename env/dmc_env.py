@@ -10,7 +10,7 @@ class DMCFrameStack(gym.Wrapper):
         shp = env.observation_space.shape
         self.observation_space = gym.spaces.Box(
             low=0,
-            high=1,
+            high=255,
             shape=((shp[0] * k,) + shp[1:]),
             dtype=env.observation_space.dtype
         )

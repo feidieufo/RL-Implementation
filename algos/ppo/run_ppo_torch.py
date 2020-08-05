@@ -75,7 +75,7 @@ class ReplayBuffer:
         if self.is_gae:
             self.reward = self.adv + self.v
 
-        self.adv = (self.adv - np.mean(self.adv))/np.std(self.adv)
+        self.adv = (self.adv - np.mean(self.adv))/(np.std(self.adv) + 1e-8)
 
     def get_batch(self, batch=100, shuffle=True):
         if shuffle:
@@ -92,18 +92,18 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--iteration', default=int(1e3), type=int)
-    parser.add_argument('--gamma', default=0.99)
-    parser.add_argument('--lam', default=0.95)
-    parser.add_argument('--a_update', default=10)
-    parser.add_argument('--lr', default=3e-4)
+    parser.add_argument('--gamma', default=0.99, type=float)
+    parser.add_argument('--lam', default=0.95, type=float)
+    parser.add_argument('--a_update', default=10, type=int)
+    parser.add_argument('--lr', default=3e-4, type=float)
     parser.add_argument('--log', type=str, default="logs")
     parser.add_argument('--steps', default=3000, type=int)
-    parser.add_argument('--gpu', default=0)
+    parser.add_argument('--gpu', default=0, type=int)
     parser.add_argument('--env', default="Pendulum-v0")
     parser.add_argument('--env_num', default=4, type=int)
     parser.add_argument('--exp_name', default="ppo_Pendulum")
     parser.add_argument('--seed', default=0, type=int)
-    parser.add_argument('--batch', default=50)
+    parser.add_argument('--batch', default=50, type=int)
     parser.add_argument('--norm_state', default=False)
     parser.add_argument('--norm_rewards', default=False)
     parser.add_argument('--is_clip_v', default=True)
@@ -111,7 +111,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_grad_norm', default=False)
     parser.add_argument('--anneal_lr', default=False)
     parser.add_argument('--debug', default=True)
-    parser.add_argument('--log_every', default=10)
+    parser.add_argument('--log_every', default=10, type=int)
     parser.add_argument('--target_kl', default=0.03, type=float)
     args = parser.parse_args()
 
@@ -156,7 +156,6 @@ if __name__ == '__main__':
             a_tensor = ppo.actor.select_action(state_tensor)
             a = a_tensor.detach().cpu().numpy()
             obs_, r, done, _ = env.step(a)
-            obs_ = state_norm(obs_)
             rew += r
             r = reward_norm(r)
             mask = 1-done
