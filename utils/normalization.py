@@ -39,13 +39,13 @@ class RunningStat:  # for class AutoNormalization
 
 
 class Identity:
-    def __call__(self, x):
+    def __call__(self, x, update=True):
         return x
 
 class ImageProcess:
     def __init__(self, pre_filter):
         self.pre_filter = pre_filter
-    def __call__(self, x):
+    def __call__(self, x, update=True):
         x = self.pre_filter(x)
         x = np.array(x).astype(np.float32) / 255.0
         return x
@@ -61,10 +61,11 @@ class RewardFilter:
         self.rs = RunningStat(shape)
         self.ret = np.zeros(shape)
 
-    def __call__(self, x):
+    def __call__(self, x, update=True):
         x = self.pre_filter(x)
         self.ret = self.ret*self.gamma + x
-        self.rs.push(self.ret)
+        if update:
+           self.rs.push(self.ret)
         x = self.ret/(self.rs.std + 1e-8)
         if self.clip:
             x = np.clip(x, -self.clip, self.clip)

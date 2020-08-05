@@ -118,15 +118,16 @@ class ActorDisc(torch.nn.Module):
 
 class PPO(torch.nn.Module):
     def __init__(self, state_dim, act_dim, act_max, epsilon, device, lr_a=0.001,
-                 c_en=0.01, c_vf=0.5, max_grad_norm=False, anneal_lr=False, train_steps=1000,):
+                 c_en=0.01, c_vf=0.5, max_grad_norm=False, anneal_lr=False, train_steps=1000,
+                 emb_dim=50):
         super().__init__()
         if type(act_dim) == np.int64 or type(act_dim) == np.int:
-            self.actor = ActorDisc(state_dim, act_dim).to(device)
-            self.old_actor = ActorDisc(state_dim, act_dim).to(device)
+            self.actor = ActorDisc(state_dim, act_dim, emb_dim=emb_dim).to(device)
+            self.old_actor = ActorDisc(state_dim, act_dim, emb_dim=emb_dim).to(device)
         else:
-            self.actor = Actor(state_dim, act_dim[0], act_max).to(device)
-            self.old_actor = Actor(state_dim, act_dim[0], act_max).to(device)
-        self.critic = Critic(state_dim).to(device)
+            self.actor = Actor(state_dim, act_dim[0], act_max, emb_dim=emb_dim).to(device)
+            self.old_actor = Actor(state_dim, act_dim[0], act_max, emb_dim=emb_dim).to(device)
+        self.critic = Critic(state_dim, emb_dim=emb_dim).to(device)
         self.epsilon = epsilon
         self.c_en = c_en
         self.c_vf = c_vf
