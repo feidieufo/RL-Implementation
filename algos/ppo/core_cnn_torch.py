@@ -123,7 +123,7 @@ class ActorDisc(torch.nn.Module):
 
         self.final = torch.nn.Sequential(
             torch.nn.Linear(emb_dim, a_num),
-            torch.nn.Softmax()
+            # torch.nn.Softmax()
         )
 
         initialize_weights(self.emb, "orthogonal", scale=np.sqrt(2))
@@ -138,7 +138,7 @@ class ActorDisc(torch.nn.Module):
     def select_action(self, s):
         with torch.no_grad():
             x = self(s)
-            normal = torch.distributions.Categorical(x)
+            normal = torch.distributions.Categorical(logits=x)
             action = normal.sample()
             action = torch.squeeze(action, dim=0)
 
@@ -147,7 +147,7 @@ class ActorDisc(torch.nn.Module):
     def log_pi(self, s, a):
         x = self(s)
 
-        normal = torch.distributions.Categorical(x)
+        normal = torch.distributions.Categorical(logits=x)
         logpi = normal.log_prob(a)
 
         return logpi                      # [None,]
@@ -170,7 +170,7 @@ class PPO(torch.nn.Module):
         self.max_grad_norm = max_grad_norm
         self.anneal_lr = anneal_lr
 
-        self.opti = torch.optim.Adam(list(self.actor.parameters()) + list(self.critic.parameters()), lr=lr_a)
+        self.opti = torch.optim.Adam(list(self.actor.parameters()) + list(self.critic.parameters()), lr=lr_a, eps=1e-5)
 
         if anneal_lr:
             lam = lambda f: 1 - f / train_steps

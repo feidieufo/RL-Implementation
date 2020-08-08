@@ -182,7 +182,7 @@ class PPO(torch.nn.Module):
         self.max_grad_norm = max_grad_norm
         self.anneal_lr = anneal_lr
 
-        self.opti = torch.optim.Adam(list(self.actor.parameters()) + list(self.critic.parameters()), lr=lr_a)
+        self.opti = torch.optim.Adam(list(self.actor.parameters()) + list(self.critic.parameters()), lr=lr_a, eps=1e-5)
 
         if anneal_lr:
             lam = lambda f: 1 - f / train_steps
