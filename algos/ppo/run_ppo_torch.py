@@ -113,6 +113,7 @@ if __name__ == '__main__':
     parser.add_argument('--debug', default=True)
     parser.add_argument('--log_every', default=10, type=int)
     parser.add_argument('--target_kl', default=0.03, type=float)
+    parser.add_argument('--test_epoch', default=10, type=int)    
     args = parser.parse_args()
 
     device = torch.device("cuda:"+str(args.gpu) if torch.cuda.is_available() else "cpu")
@@ -146,7 +147,10 @@ if __name__ == '__main__':
         reward_norm = RewardFilter(reward_norm, (), clip=10.0)
 
     for iter in range(args.iteration):
+        ppo.train()
         replay.reset()
+        state_norm.reset()
+        reward_norm.reset()
         obs = env.reset()
         obs = state_norm(obs)
         rew = 0
@@ -167,6 +171,8 @@ if __name__ == '__main__':
                 logger.store(reward=rew)
                 rew = 0
                 obs = env.reset()
+                state_norm.reset()
+                reward_norm.reset()
             obs = state_norm(obs)
 
         state = replay.state
@@ -181,9 +187,6 @@ if __name__ == '__main__':
         replay.finish_path()
 
         ppo.update_a()
-        writer.add_scalar("reward", logger.get_stats("reward")[0], global_step=iter)
-        writer.add_histogram("action", np.array(replay.action), global_step=iter)
-
         for i in range(args.a_update):
             for (s, a, r, adv, v) in replay.get_batch(batch=args.batch):
                 s_tensor = torch.tensor(s, dtype=torch.float32, device=device)
@@ -192,7 +195,7 @@ if __name__ == '__main__':
                 r_tensor = torch.tensor(r, dtype=torch.float32, device=device)
                 v_tensor = torch.tensor(v, dtype=torch.float32, device=device)
 
-                info = ppo.train(s_tensor, a_tensor, adv_tensor, r_tensor, v_tensor, is_clip_v=args.is_clip_v)
+                info = ppo.train_ac(s_tensor, a_tensor, adv_tensor, r_tensor, v_tensor, is_clip_v=args.is_clip_v)
 
                 if args.debug:
                     logger.store(aloss=info["aloss"])
@@ -206,14 +209,40 @@ if __name__ == '__main__':
 
         if args.anneal_lr:
             ppo.lr_scheduler()
+
+        ppo.eval()
+        for i in range(args.test_epoch):
+            obs = env.reset()
+            state_norm.reset()
+            reward_norm.reset()
+            obs = state_norm(obs, update=False)
+            rew = 0
+
+            while True:
+                state_tensor = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
+                a_tensor, var = ppo.actor(state_tensor)
+                a_tensor = torch.squeeze(a_tensor, dim=0)
+                a = a_tensor.detach().cpu().numpy()
+                obs, r, done, _ = env.step(a)
+                rew += r
+
+                if done:
+                    logger.store(test_reward=rew)
+                    break
+                obs = state_norm(obs, update=False)
+        
+        writer.add_scalar("test_reward", logger.get_stats("test_reward")[0], global_step=iter)  
+        writer.add_scalar("reward", logger.get_stats("reward")[0], global_step=iter)
+        writer.add_histogram("action", np.array(replay.action), global_step=iter)
         if args.debug:
             writer.add_scalar("aloss", logger.get_stats("aloss")[0], global_step=iter)
             writer.add_scalar("vloss", logger.get_stats("vloss")[0], global_step=iter)
             writer.add_scalar("entropy", logger.get_stats("entropy")[0], global_step=iter)
-            writer.add_scalar("kl", logger.get_stats("kl")[0], global_step=iter)
+            writer.add_scalar("kl", logger.get_stats("kl")[0], global_step=iter)              
 
         logger.log_tabular('Epoch', iter)
         logger.log_tabular("reward", with_min_and_max=True)
+        logger.log_tabular("test_reward", with_min_and_max=True)
         if args.debug:
             logger.log_tabular("aloss", with_min_and_max=True)
             logger.log_tabular("vloss", with_min_and_max=True)

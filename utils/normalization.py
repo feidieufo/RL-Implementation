@@ -42,6 +42,9 @@ class Identity:
     def __call__(self, x, update=True):
         return x
 
+    def reset(self):
+        pass
+
 class ImageProcess:
     def __init__(self, pre_filter):
         self.pre_filter = pre_filter
@@ -49,6 +52,9 @@ class ImageProcess:
         x = self.pre_filter(x)
         x = np.array(x).astype(np.float32) / 255.0
         return x
+    
+    def reset(self):
+        self.pre_filter.reset()  
 
 class RewardFilter:
     def __init__(self, pre_filter, shape, center=True, scale=True, clip=10.0, gamma=0.99):
@@ -70,6 +76,11 @@ class RewardFilter:
         if self.clip:
             x = np.clip(x, -self.clip, self.clip)
         return x
+    
+    def reset(self):
+        self.pre_filter.reset() 
+        self.ret = np.zeros(self.ret.shape)   
+
 
 
 class AutoNormalization:
@@ -92,6 +103,9 @@ class AutoNormalization:
         if self.clip:
             x = np.clip(x, -self.clip, self.clip)
         return x
+
+    def reset(self):
+        self.prev_filter.reset()
 
     @staticmethod
     def output_shape(input_space):

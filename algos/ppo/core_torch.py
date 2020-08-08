@@ -5,9 +5,12 @@ import numpy as np
 
 class Discriminator(torch.nn.Module):
     def __init__(self, s_dim, a_dim):
-        self.s_emb = ActorEmb(s_dim)
+        super().__init__()
+        self.s_emb = torch.nn.Sequential(
+            torch.nn.Linear(np.prod(s_dim), 100)
+        )
         self.a_emb = torch.nn.Sequential(
-            torch.nn.Linear(a_dim, 100)
+            torch.nn.Linear(np.prod(a_dim), 100)
         )
         self.d = torch.nn.Sequential(
             torch.nn.Linear(100+100, 100),
@@ -22,6 +25,10 @@ class Discriminator(torch.nn.Module):
         x = torch.cat([s, a], dim=1)
         x = self.d(x)
         return x
+
+    def predict_v(self, s, a):
+        d = self(s, a)
+        return torch.squeeze(-torch.log(d))
 
 
 def initialize_weights(mod, initialization_type, scale=np.sqrt(2)):
@@ -182,7 +189,7 @@ class PPO(torch.nn.Module):
             self.opti_scheduler = torch.optim.lr_scheduler.LambdaLR(self.opti, lr_lambda=lam)
 
 
-    def train(self, s, a, adv, vs, oldv, is_clip_v=True):
+    def train_ac(self, s, a, adv, vs, oldv, is_clip_v=True):
         self.opti.zero_grad()
         logpi = self.actor.log_pi(s, a)
         old_logpi = self.old_actor.log_pi(s, a)

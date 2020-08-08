@@ -176,7 +176,7 @@ class PPO(torch.nn.Module):
             lam = lambda f: 1 - f / train_steps
             self.opti_scheduler = torch.optim.lr_scheduler.LambdaLR(self.opti, lr_lambda=lam)
 
-    def train(self, s, a, adv, vs, oldv, is_clip_v=True):
+    def train_ac(self, s, a, adv, vs, oldv, is_clip_v=True):
         self.opti.zero_grad()
         logpi = self.actor.log_pi(s, a)
         old_logpi = self.old_actor.log_pi(s, a)
