@@ -72,7 +72,7 @@ class RewardFilter:
         self.ret = self.ret*self.gamma + x
         if update:
            self.rs.push(self.ret)
-        x = self.ret/(self.rs.std + 1e-8)
+        x = x/(self.rs.std + 1e-8)
         if self.clip:
             x = np.clip(x, -self.clip, self.clip)
         return x
@@ -105,7 +105,7 @@ class AutoNormalization:
         return x
 
     def reset(self):
-        self.prev_filter.reset()
+        self.pre_filter.reset()
 
     @staticmethod
     def output_shape(input_space):

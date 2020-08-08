@@ -268,6 +268,7 @@ if __name__ == '__main__':
 
         logger.log_tabular('Epoch', iter)
         logger.log_tabular("reward", with_min_and_max=True)
+        logger.log_tabular("test_reward", with_min_and_max=True)
         if args.debug:
             logger.log_tabular("aloss", with_min_and_max=True)
             logger.log_tabular("vloss", with_min_and_max=True)
