@@ -1,6 +1,7 @@
 import torch
 from torch.distributions import Normal, MultivariateNormal
 import numpy as np
+from utils.normalization import RunningMeanStd
 
 
 class Discriminator(torch.nn.Module):
@@ -19,6 +20,9 @@ class Discriminator(torch.nn.Module):
             torch.nn.Sigmoid(),
         )
 
+        self.returns = None
+        self.ret_rms = RunningMeanStd(shape=())
+
     def forward(self, s, a):
         s = self.s_emb(s)
         a = self.a_emb(a)
@@ -26,9 +30,17 @@ class Discriminator(torch.nn.Module):
         x = self.d(x)
         return x
 
-    def predict_v(self, s, a):
+    def predict_v(self, s, a, masks, update_rms=True, gamma=0.99):
         d = self(s, a)
-        return torch.squeeze(-torch.log(d))
+        reward = torch.squeeze(-torch.log(d))
+        if self.returns is None:
+            self.returns = reward.clone()
+
+        if update_rms:
+            self.returns = self.returns * masks * gamma + reward
+            self.ret_rms.update(self.returns.detach().cpu().numpy())
+
+        return reward / np.sqrt(self.ret_rms.var + 1e-8)
 
 
 def initialize_weights(mod, initialization_type, scale=np.sqrt(2)):
@@ -182,7 +194,7 @@ class PPO(torch.nn.Module):
         self.max_grad_norm = max_grad_norm
         self.anneal_lr = anneal_lr
 
-        self.opti = torch.optim.Adam(list(self.actor.parameters()) + list(self.critic.parameters()), lr=lr_a)
+        self.opti = torch.optim.Adam(list(self.actor.parameters()) + list(self.critic.parameters()), lr=lr_a, eps=1e-5)
 
         if anneal_lr:
             lam = lambda f: 1 - f / train_steps
