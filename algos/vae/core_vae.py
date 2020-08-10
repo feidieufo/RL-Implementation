@@ -45,12 +45,12 @@ class Actor(torch.nn.Module):
         self.a_max = a_max
 
         self.mu = torch.nn.Sequential(
-            torch.nn.Linear(emb_dim, 100),
+            torch.nn.Linear(emb_dim, 64),
             torch.nn.ReLU(),
-            torch.nn.Linear(100, a_dim),
+            torch.nn.Linear(64, a_dim),
             torch.nn.Tanh()
         )
-        self.var = torch.nn.Parameter(torch.tensor(-0.5 * np.ones(a_dim, dtype=np.float32)))
+        self.var = torch.nn.Parameter(torch.zeros(1, a_dim))
 
         initialize_weights(self.mu, "orthogonal", scale=0.01)
 
@@ -135,13 +135,13 @@ class PPO(torch.nn.Module):
         self.max_grad_norm = max_grad_norm
         self.anneal_lr = anneal_lr
 
-        self.opti = torch.optim.Adam(list(self.actor.parameters()) + list(self.critic.parameters()), lr=lr_a)
+        self.opti = torch.optim.Adam(list(self.actor.parameters()) + list(self.critic.parameters()), lr=lr_a, eps=1e-5)
 
         if anneal_lr:
             lam = lambda f: 1 - f / train_steps
             self.opti_scheduler = torch.optim.lr_scheduler.LambdaLR(self.opti, lr_lambda=lam)
 
-    def train(self, s, a, adv, vs, oldv, is_clip_v=True):
+    def train_ac(self, s, a, adv, vs, oldv, is_clip_v=True):
         self.opti.zero_grad()
         logpi = self.actor.log_pi(s, a)
         old_logpi = self.old_actor.log_pi(s, a)

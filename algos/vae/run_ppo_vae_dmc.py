@@ -14,71 +14,69 @@ import dmc2gym
 import env.atari_lib as atari
 from env.dmc_env import DMCFrameStack
 from utils.normalization import *
+from algos.ppo.utils import discount_path, get_path_indices
 import json
 
 from algos.vae.encoder import PixelEncoder
 from algos.vae.decoder import PixelDecoder
 
-def discount_cumsum(x, discount):
-    """
-    magic from rllab for computing discounted cumulative sums of vectors.
-
-    input:
-        vector x,
-        [x0,
-         x1,
-         x2]
-
-    output:
-        [x0 + discount * x1 + discount^2 * x2,
-         x1 + discount * x2,
-         x2]
-    """
-    return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
-
 class ReplayBuffer:
-    def __init__(self, size, gamma=0.99, lam=0.95):
+    def __init__(self, size, state_dim, act_dim, gamma=0.99, lam=0.95, is_gae=True):
         self.size = size
+        self.state_dim = state_dim
+        self.act_dim = act_dim
         self.gamma = gamma
         self.lam = lam
+        self.is_gae = is_gae
         self.reset()
 
     def reset(self):
-        self.state = []
-        self.action = []
+        self.state = np.zeros((self.size, self.state_dim), np.float32)
+        if type(self.act_dim) == np.int64 or type(self.act_dim) == np.int:
+            self.action = np.zeros((self.size, ), np.int32)
+        else:
+            self.action = np.zeros((self.size,) + self.act_dim, np.float32)
         self.v = np.zeros((self.size, ), np.float32)
         self.reward = np.zeros((self.size, ), np.float32)
         self.adv = np.zeros((self.size, ), np.float32)
+        self.mask = np.zeros((self.size, ), np.float32)
         self.ptr, self.path_start = 0, 0
 
-    def add(self, s, a, v, r):
+    def add(self, s, a, r, mask):
         if self.ptr < self.size:
-            self.state.append(s)
-            self.action.append(a)
-            self.v[self.ptr] = v
+            self.state[self.ptr] = s
+            self.action[self.ptr] = a
             self.reward[self.ptr] = r
+            self.mask[self.ptr] = mask
             self.ptr += 1
 
-    def finish_path(self, last_v):
-        path_slice = slice(self.path_start, self.ptr)
-        reward = self.reward[path_slice]
+    def update_v(self, v, pos):
+        self.v[pos] = v
 
-        v = self.v[path_slice]
-        v_ = np.append(self.v[self.path_start + 1:self.ptr], last_v)
-        adv = reward + self.gamma * v_ - v
-        adv = discount_cumsum(adv, self.gamma * self.lam)
+    def finish_path(self):
+        """
+          Calculate GAE advantage, discounted returns, and
+          true reward (average reward per trajectory)
 
-        # reward[-1] = reward[-1] + self.gamma * last_v
-        # reward = discount_cumsum(reward, self.gamma)
-        self.reward[path_slice] = adv + v 
+          GAE: delta_t^V = r_t + discount * V(s_{t+1}) - V(s_t)
+          using formula from John Schulman's code:
+          V(s_t+1) = {0 if s_t is terminal
+                   {v_s_{t+1} if s_t not terminal and t != T (last step)
+                   {v_s if s_t not terminal and t == T
+          """
+        v_ = np.concatenate([self.v[1:], self.v[-1:]], axis=0) * self.mask
+        adv = self.reward + self.gamma * v_ - self.v
 
-        self.adv[path_slice] = adv
-        self.path_start = self.ptr
+        indices = get_path_indices(self.mask)
 
-    def get(self):
+        for (start, end) in indices:
+            self.adv[start:end] = discount_path(adv[start:end], self.gamma * self.lam)
+            if not self.is_gae:
+                self.reward[start:end] = discount_path(self.reward[start:end], self.gamma)
+        if self.is_gae:
+            self.reward = self.adv + self.v
+
         self.adv = (self.adv - np.mean(self.adv))/(np.std(self.adv) + 1e-8)
-        # self.reward = (self.reward - np.mean(self.reward))/np.std(self.reward)
-
 
     def get_batch(self, batch=100, shuffle=True):
         if shuffle:
@@ -86,21 +84,23 @@ class ReplayBuffer:
         else:
             indices = np.arange(self.size)
 
-        state = np.array(self.state)
-        action = np.array(self.action)
         for idx in np.arange(0, self.size, batch):
             pos = indices[idx:(idx + batch)]
-            yield (state[pos], action[pos], self.reward[pos], self.adv[pos], self.v[pos])
+            yield (self.state[pos], self.action[pos], self.reward[pos], self.adv[pos], self.v[pos])
+
 
 class ImageEncodeProcess:
     def __init__(self, pre_filter):
         self.pre_filter = pre_filter
-    def __call__(self, x):
+    def __call__(self, x, update=True):
         x = self.pre_filter(x)
         x = np.array(x).astype(np.float32)
         x = torch.tensor(x, device=device).unsqueeze(0)
         x = encoder(x).detach()
         return x
+    
+    def reset(self):
+        self.pre_filter.reset() 
 
 if __name__ == '__main__':
 
@@ -113,31 +113,30 @@ if __name__ == '__main__':
     parser.add_argument('--encoder_type', default='pixel', type=str)
 
     parser.add_argument('--iteration', default=int(1e3), type=int)
-    parser.add_argument('--gamma', default=0.99)
-    parser.add_argument('--lam', default=0.95)
-    parser.add_argument('--a_update', default=10)
-    parser.add_argument('--c_update', default=10)
-    parser.add_argument('--lr_a', default=2.5e-4)
-    parser.add_argument('--lr_c', default=1e-3)
+    parser.add_argument('--gamma', default=0.99, type=float)
+    parser.add_argument('--lam', default=0.95, type=float)
+    parser.add_argument('--a_update', default=10, type=int)
+    parser.add_argument('--lr_a', default=2.5e-4, type=float)
     parser.add_argument('--log', type=str, default="logs")
     parser.add_argument('--steps', default=3000, type=int)
-    parser.add_argument('--gpu', default=0)
+    parser.add_argument('--gpu', default=0, type=int)
     parser.add_argument('--env_num', default=4, type=int)
-    parser.add_argument('--exp_name', default="ppo_vae_cheetah_run")
+    parser.add_argument('--exp_name', default="ppo_vae_cheetah_run_test")
     parser.add_argument('--seed', default=10, type=int)
-    parser.add_argument('--batch', default=50)
+    parser.add_argument('--batch', default=50, type=int)
     parser.add_argument('--norm_state', default=False)
     parser.add_argument('--norm_rewards', default=False)
     parser.add_argument('--is_clip_v', default=True)
     parser.add_argument('--max_grad_norm', default=False)
     parser.add_argument('--anneal_lr', default=False)
     parser.add_argument('--debug', default=True)
-    parser.add_argument('--log_every', default=10)
+    parser.add_argument('--log_every', default=10, type=int)
     parser.add_argument('--network', default="cnn")
     parser.add_argument('--feature_dim', default=50, type=int)
     parser.add_argument('--target_kl', default=0.03, type=float)
     parser.add_argument('--encoder_dir', default="vae_2")
     parser.add_argument('--encoder_check', default=300, type=int)
+    parser.add_argument('--test_epoch', default=10, type=int) 
     args = parser.parse_args()
 
     device = torch.device("cuda:"+str(args.gpu) if torch.cuda.is_available() else "cpu")
@@ -174,7 +173,7 @@ if __name__ == '__main__':
                        max_grad_norm=args.max_grad_norm,
                        anneal_lr=args.anneal_lr, train_steps=args.iteration, emb_dim=args.feature_dim)
 
-    replay = ReplayBuffer(args.steps)
+    replay = ReplayBuffer(args.steps, args.feature_dim, act_dim)
     encoder = PixelEncoder(state_dim, args.feature_dim, num_layers=4).to(device)
     encoder_kwargs = setup_logger_kwargs(args.encoder_dir, args.seed)
     encoder_file = os.path.join(encoder_kwargs["output_dir"], "checkpoints", str(args.encoder_check) + ".pth")
@@ -192,8 +191,10 @@ if __name__ == '__main__':
         reward_norm = RewardFilter(reward_norm, (), clip=5.0)
 
     for iter in range(args.iteration):
+        ppo.train()
         replay.reset()
-        rewards = []
+        state_norm.reset()
+        reward_norm.reset()
         obs = env.reset()
         obs = state_norm(obs)
         rew = 0
@@ -207,27 +208,30 @@ if __name__ == '__main__':
             rew += r
             r = reward_norm(r)
 
-            v_pred = ppo.getV(obs)
-            replay.add(obs.cpu().numpy()[0], a, v_pred.detach().cpu().numpy(), r)
+            mask = 1-done
+            replay.add(obs.cpu().numpy()[0], a, r, mask)
 
             obs = obs_
             if done or step == args.steps-1:
-                if done:
-                    replay.finish_path(0)
-                else:
-                    last_v = ppo.getV(obs_)
-                    replay.finish_path(last_v.detach().cpu().numpy())
-
-                rewards.append(rew)
                 logger.store(reward=rew)
                 rew = 0
+                state_norm.reset()
+                reward_norm.reset()
                 obs = env.reset()
                 obs = state_norm(obs)
 
+        state = replay.state
+        for idx in np.arange(0, state.shape[0], args.batch):
+            if idx + args.batch <= state.shape[0]:
+                pos = np.arange(idx, idx + args.batch)
+            else:
+                pos = np.arange(idx, state.shape[0])
+            s = torch.tensor(state[pos], dtype=torch.float32).to(device)
+            v = ppo.getV(s).detach().cpu().numpy()
+            replay.update_v(v, pos)
+        replay.finish_path()
+
         ppo.update_a()
-        replay.get()
-        writer.add_scalar("reward", logger.get_stats("reward")[0], global_step=iter)
-        writer.add_histogram("action", np.array(replay.action), global_step=iter)
 
         for i in range(args.a_update):
             for (s, a, r, adv, v) in replay.get_batch(batch=args.batch):
@@ -237,7 +241,7 @@ if __name__ == '__main__':
                 r_tensor = torch.tensor(r, dtype=torch.float32, device=device)
                 v_tensor = torch.tensor(v, dtype=torch.float32, device=device)
 
-                info = ppo.train(s_tensor, a_tensor, adv_tensor, r_tensor, v_tensor, is_clip_v=args.is_clip_v)
+                info = ppo.train_ac(s_tensor, a_tensor, adv_tensor, r_tensor, v_tensor, is_clip_v=args.is_clip_v)
 
                 if args.debug:
                     logger.store(aloss=info["aloss"])
@@ -251,6 +255,30 @@ if __name__ == '__main__':
 
         if args.anneal_lr:
             ppo.lr_scheduler()
+        
+        ppo.eval()
+        for i in range(args.test_epoch):
+            obs = env.reset()
+            state_norm.reset()
+            reward_norm.reset()
+            obs = state_norm(obs, update=False)
+            rew = 0
+
+            while True:
+                a_tensor, var = ppo.actor(obs)
+                a_tensor = torch.squeeze(a_tensor, dim=0)
+                a = a_tensor.detach().cpu().numpy()
+                obs, r, done, _ = env.step(np.clip(a, -1, 1))
+                rew += r
+
+                if done:
+                    logger.store(test_reward=rew)
+                    break
+                obs = state_norm(obs, update=False)
+
+        writer.add_scalar("test_reward", logger.get_stats("test_reward")[0], global_step=iter)  
+        writer.add_scalar("reward", logger.get_stats("reward")[0], global_step=iter)
+        writer.add_histogram("action", np.array(replay.action), global_step=iter)
         if args.debug:
             writer.add_scalar("aloss", logger.get_stats("aloss")[0], global_step=iter)
             writer.add_scalar("vloss", logger.get_stats("vloss")[0], global_step=iter)
@@ -259,6 +287,7 @@ if __name__ == '__main__':
 
         logger.log_tabular('Epoch', iter)
         logger.log_tabular("reward", with_min_and_max=True)
+        logger.log_tabular("test_reward", with_min_and_max=True)
         if args.debug:
             logger.log_tabular("aloss", with_min_and_max=True)
             logger.log_tabular("vloss", with_min_and_max=True)

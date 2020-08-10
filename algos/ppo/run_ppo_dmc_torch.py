@@ -248,7 +248,7 @@ if __name__ == '__main__':
                 a_tensor, var = ppo.actor(state_tensor)
                 a_tensor = torch.squeeze(a_tensor, dim=0)
                 a = a_tensor.detach().cpu().numpy()
-                obs, r, done, _ = env.step(a)
+                obs, r, done, _ = env.step(np.clip(a, -1, 1))
                 rew += r
 
                 if done:

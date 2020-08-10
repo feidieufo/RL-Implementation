@@ -26,7 +26,7 @@ if __name__ == '__main__':
     parser.add_argument('--encoder_type', default='pixel', type=str)
 
     parser.add_argument('--exp_name', default="ppo_cheetah_run_clipv_maxgrad_anneallr2.5e-3_stack3_normal_state01_maxkl0.03_gae")
-    parser.add_argument('--seed', default=10)
+    parser.add_argument('--seed', default=10, type=int)
     parser.add_argument('--norm_state', default=False)
     parser.add_argument('--norm_rewards', default=False)
     parser.add_argument('--expert_num', default=10, type=int)
