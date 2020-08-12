@@ -99,9 +99,9 @@ if __name__ == '__main__':
     parser.add_argument('--log', type=str, default="logs")
     parser.add_argument('--steps', default=3000, type=int)
     parser.add_argument('--gpu', default=0, type=int)
-    parser.add_argument('--env', default="Pendulum-v0")
+    parser.add_argument('--env', default="CartPole-v1")
     parser.add_argument('--env_num', default=4, type=int)
-    parser.add_argument('--exp_name', default="ppo_Pendulum")
+    parser.add_argument('--exp_name', default="ppo_cartpole")
     parser.add_argument('--seed', default=0, type=int)
     parser.add_argument('--batch', default=50, type=int)
     parser.add_argument('--norm_state', default=False)
@@ -131,8 +131,12 @@ if __name__ == '__main__':
     env.seed(args.seed)
 
     state_dim = env.observation_space.shape
-    act_dim = env.action_space.shape
-    action_max = env.action_space.high[0]
+    if type(env.action_space) == gym.spaces.Discrete:
+        act_dim = env.action_space.n
+        action_max = 1
+    else:
+        act_dim = env.action_space.shape
+        action_max = env.action_space.high[0]
     ppo = core.PPO(state_dim, act_dim, action_max, 0.2, device, lr_a=args.lr, max_grad_norm=args.max_grad_norm,
                    anneal_lr=args.anneal_lr, train_steps=args.iteration)
     replay = ReplayBuffer(args.steps, state_dim, act_dim, is_gae=args.is_gae)
@@ -220,7 +224,11 @@ if __name__ == '__main__':
 
             while True:
                 state_tensor = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
-                a_tensor, var = ppo.actor(state_tensor)
+                if type(env.action_space) == gym.spaces.Discrete:
+                    a_tensor = ppo.actor(state_tensor)
+                    a_tensor = torch.argmax(a_tensor, dim=1)
+                else:
+                    a_tensor, var = ppo.actor(state_tensor)
                 a_tensor = torch.squeeze(a_tensor, dim=0)
                 a = a_tensor.detach().cpu().numpy()
                 obs, r, done, _ = env.step(a)

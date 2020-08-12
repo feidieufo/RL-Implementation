@@ -140,7 +140,7 @@ class ActorDisc(torch.nn.Module):
         super().__init__()
         self.act_num = a_num
         self.fc = torch.nn.Sequential(
-            torch.nn.Linear(s_dim, 64),
+            torch.nn.Linear(np.prod(s_dim), 64),
             torch.nn.ReLU(),
             torch.nn.Linear(64, 64),
             torch.nn.ReLU(),
@@ -148,7 +148,6 @@ class ActorDisc(torch.nn.Module):
 
         self.final = torch.nn.Sequential(
             torch.nn.Linear(emb_dim, a_num),
-            torch.nn.Softmax()
         )
 
         initialize_weights(self.fc, "orthogonal")
@@ -163,7 +162,7 @@ class ActorDisc(torch.nn.Module):
     def select_action(self, s):
         with torch.no_grad():
             x = self(s)
-            normal = torch.distributions.Categorical(x)
+            normal = torch.distributions.Categorical(logits=x)
             action = normal.sample()
             action = torch.squeeze(action, dim=0)
 
@@ -172,7 +171,7 @@ class ActorDisc(torch.nn.Module):
     def log_pi(self, s, a):
         x = self(s)
 
-        normal = torch.distributions.Categorical(x)
+        normal = torch.distributions.Categorical(logits=x)
         logpi = normal.log_prob(a)
 
         return logpi                      # [None,]
@@ -220,7 +219,8 @@ class PPO(torch.nn.Module):
             v_loss = ((v - vs) ** 2).mean()
         else:
             clip_v = oldv + torch.clamp(v - oldv, -self.epsilon, self.epsilon)
-            v_loss = torch.max(((v - vs) ** 2).mean(), ((clip_v - vs) ** 2).mean())
+            v_max = torch.max(((v - vs) ** 2), ((clip_v - vs) ** 2))
+            v_loss = v_max.mean()
 
         loss = aloss + loss_entropy*self.c_en + v_loss*self.c_vf
         loss.backward()

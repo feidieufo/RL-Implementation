@@ -53,7 +53,7 @@ class ReplayBuffer:
     def update_v(self, v, pos):
         self.v[pos] = v
 
-    def finish_path(self):
+    def finish_path(self, last_v):
         """
           Calculate GAE advantage, discounted returns, and
           true reward (average reward per trajectory)
@@ -64,7 +64,7 @@ class ReplayBuffer:
                    {v_s_{t+1} if s_t not terminal and t != T (last step)
                    {v_s if s_t not terminal and t == T
           """
-        v_ = np.concatenate([self.v[1:], self.v[-1:]], axis=0) * self.mask
+        v_ = np.concatenate([self.v[1:], [last_v]], axis=0) * self.mask
         adv = self.reward + self.gamma * v_ - self.v
 
         indices = get_path_indices(self.mask)
@@ -88,14 +88,25 @@ class ReplayBuffer:
             pos = indices[idx:(idx + batch)]
             yield (self.state[pos], self.action[pos], self.reward[pos], self.adv[pos], self.v[pos])
 
-class ImageAtariProcess:
-    def __init__(self, pre_filter):
-        self.pre_filter = pre_filter
-    def __call__(self, x, update=True):
-        x = self.pre_filter(x)
-        x = np.array(x).astype(np.float32) / 255.0
-        x = np.transpose(x, (2, 0, 1))
-        return x
+class ImageToPyTorch(gym.ObservationWrapper):
+    """
+    Image shape to channels x weight x height
+    """
+
+    def __init__(self, env):
+        super(ImageToPyTorch, self).__init__(env)
+        old_shape = self.observation_space.shape
+        self.observation_space = gym.spaces.Box(
+            low=0,
+            high=255,
+            shape=(old_shape[-1], old_shape[0], old_shape[1]),
+            dtype=np.float32,
+        )
+
+    def observation(self, observation):
+        obs = np.array(observation).astype(np.float32) / 255.0
+        return np.transpose(obs, axes=(2, 0, 1))
+
 
 if __name__ == '__main__':
 
@@ -108,13 +119,14 @@ if __name__ == '__main__':
     parser.add_argument('--log', type=str, default="logs")
     parser.add_argument('--steps', default=3000, type=int)
     parser.add_argument('--gpu', default=0, type=int)
-    parser.add_argument('--env', default="PongNoFrameskip-v4")
+    parser.add_argument('--env', default="BreakoutNoFrameskip-v4")
     parser.add_argument('--env_num', default=4, type=int)
     parser.add_argument('--exp_name', default="ppo_Pong")
     parser.add_argument('--seed', default=0, type=int)
     parser.add_argument('--batch', default=50, type=int)
     parser.add_argument('--norm_state', default=False)
     parser.add_argument('--norm_rewards', default=False)
+    parser.add_argument('--clip_coef', type=float, default=0.2)
     parser.add_argument('--is_clip_v', default=True)
     parser.add_argument('--is_gae', default=True)
     parser.add_argument('--max_grad_norm', default=False)
@@ -122,6 +134,7 @@ if __name__ == '__main__':
     parser.add_argument('--debug', default=True)
     parser.add_argument('--log_every', default=10, type=int)
     parser.add_argument('--target_kl', default=0.03, type=float)
+    parser.add_argument('--test_epoch', default=10, type=int)
     args = parser.parse_args()
 
     device = torch.device("cuda:"+str(args.gpu) if torch.cuda.is_available() else "cpu")
@@ -134,21 +147,25 @@ if __name__ == '__main__':
         json.dump(vars(args), f, sort_keys=True, indent=4)
 
     env = make_atari(args.env)
+    env = gym.wrappers.RecordEpisodeStatistics(env)
     env = wrap_deepmind(env, frame_stack=True)
+    env = ImageToPyTorch(env)
+    # test_env = make_atari(args.env)
+    # test_env = gym.wrappers.RecordEpisodeStatistics(test_env)
+    # test_env = wrap_deepmind(test_env, frame_stack=True)
+    # test_env = ImageToPyTorch(test_env)
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     env.seed(args.seed)
 
     state_dim = env.observation_space.shape
-    state_dim = (state_dim[2], state_dim[0], state_dim[1])
     act_dim = env.action_space.n
-    ppo = core.PPO(state_dim, act_dim, 1, 0.2, device, lr_a=args.lr,
+    ppo = core.PPO(state_dim, act_dim, 1, args.clip_coef, device, lr_a=args.lr,
                    max_grad_norm=args.max_grad_norm,
                    anneal_lr=args.anneal_lr, train_steps=args.iteration)
     replay = ReplayBuffer(args.steps, state_dim, act_dim, is_gae=args.is_gae)
 
     state_norm = Identity()
-    state_norm = ImageAtariProcess(state_norm)
     reward_norm = Identity()
     if args.norm_state:
         state_norm = AutoNormalization(state_norm, state_dim, clip=10.0)
@@ -157,17 +174,19 @@ if __name__ == '__main__':
     elif args.norm_rewards == "returns":
         reward_norm = RewardFilter(reward_norm, (), clip=10.0)
 
+    obs = env.reset()
+    obs = state_norm(obs)
+    rew = 0
     for iter in range(args.iteration):
+        ppo.train()
         replay.reset()
-        obs = env.reset()
-        obs = state_norm(obs)
-        rew = 0
+        flag = 0
 
         for step in range(args.steps):
             state_tensor = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
             a_tensor = ppo.actor.select_action(state_tensor)
             a = a_tensor.detach().cpu().numpy()
-            obs_, r, done, _ = env.step(a)
+            obs_, r, done, info = env.step(a)
             rew += r
             r = reward_norm(r)
             mask = 1-done
@@ -175,11 +194,16 @@ if __name__ == '__main__':
             replay.add(obs, a, r, mask)
 
             obs = obs_
-            if done or step == args.steps-1:
-                logger.store(reward=rew)
+            if done:
+                if 'episode' in info.keys():
+                    logger.store(reward=info['episode']['r'])
+                    flag = 1
                 rew = 0
                 obs = env.reset()
             obs = state_norm(obs)
+        if flag == 0:
+            logger.store(reward=0)
+            print("null reward")
 
         state = replay.state
         for idx in np.arange(0, state.shape[0], args.batch):
@@ -190,11 +214,11 @@ if __name__ == '__main__':
             s = torch.tensor(state[pos], dtype=torch.float32).to(device)
             v = ppo.getV(s).detach().cpu().numpy()
             replay.update_v(v, pos)
-        replay.finish_path()
+        s_tensor = torch.tensor(obs_, dtype=torch.float32).to(device).unsqueeze(0)
+        last_v = ppo.getV(s_tensor).detach().cpu().numpy()
+        replay.finish_path(last_v)
 
         ppo.update_a()
-        writer.add_scalar("reward", logger.get_stats("reward")[0], global_step=iter)
-        writer.add_histogram("action", np.array(replay.action), global_step=iter)
 
         for i in range(args.a_update):
             for (s, a, r, adv, v) in replay.get_batch(batch=args.batch):
@@ -204,7 +228,7 @@ if __name__ == '__main__':
                 r_tensor = torch.tensor(r, dtype=torch.float32, device=device)
                 v_tensor = torch.tensor(v, dtype=torch.float32, device=device)
 
-                info = ppo.train(s_tensor, a_tensor, adv_tensor, r_tensor, v_tensor, is_clip_v=args.is_clip_v)
+                info = ppo.train_ac(s_tensor, a_tensor, adv_tensor, r_tensor, v_tensor, is_clip_v=args.is_clip_v)
 
                 if args.debug:
                     logger.store(aloss=info["aloss"])
@@ -218,6 +242,11 @@ if __name__ == '__main__':
 
         if args.anneal_lr:
             ppo.lr_scheduler()
+
+
+        # writer.add_scalar("test_reward", logger.get_stats("test_reward")[0], global_step=iter) 
+        writer.add_scalar("reward", logger.get_stats("reward")[0], global_step=iter)
+        writer.add_histogram("action", np.array(replay.action), global_step=iter)
         if args.debug:
             writer.add_scalar("aloss", logger.get_stats("aloss")[0], global_step=iter)
             writer.add_scalar("vloss", logger.get_stats("vloss")[0], global_step=iter)
@@ -226,6 +255,7 @@ if __name__ == '__main__':
 
         logger.log_tabular('Epoch', iter)
         logger.log_tabular("reward", with_min_and_max=True)
+        # logger.log_tabular("test_reward", with_min_and_max=True)
         if args.debug:
             logger.log_tabular("aloss", with_min_and_max=True)
             logger.log_tabular("vloss", with_min_and_max=True)

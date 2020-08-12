@@ -32,14 +32,14 @@ class ActorCnnEmb(torch.nn.Module):
             torch.nn.ReLU(),
             torch.nn.Conv2d(32, 64, kernel_size=4, stride=2),
             torch.nn.ReLU(),
-            torch.nn.Conv2d(64, 64, kernel_size=1, stride=1),
+            torch.nn.Conv2d(64, 64, kernel_size=3, stride=1),
             torch.nn.ReLU(),
         )
 
         h = self.conv2d_size_out(self.conv2d_size_out(
-            self.conv2d_size_out(s_dim[1], kernel_size=8, stride=4), 4, 2), 1, 1)
+            self.conv2d_size_out(s_dim[1], kernel_size=8, stride=4), 4, 2), 3, 1)
         w = self.conv2d_size_out(self.conv2d_size_out(
-            self.conv2d_size_out(s_dim[2], kernel_size=8, stride=4), 4, 2), 1, 1)
+            self.conv2d_size_out(s_dim[2], kernel_size=8, stride=4), 4, 2), 3, 1)
 
         self.fc = torch.nn.Sequential(
             torch.nn.Linear(h*w*64, emb_dim),
@@ -83,7 +83,7 @@ class Actor(torch.nn.Module):
             torch.nn.Linear(100, a_dim),
             torch.nn.Tanh()
         )
-        self.var = torch.nn.Parameter(torch.tensor(-0.5 * np.ones(a_dim, dtype=np.float32)))
+        self.var = torch.nn.Parameter(torch.zeros(1, a_dim))
 
         initialize_weights(self.emb, "orthogonal", scale=np.sqrt(2))
         initialize_weights(self.mu, "orthogonal", scale=0.01)
@@ -146,6 +146,8 @@ class ActorDisc(torch.nn.Module):
 
     def log_pi(self, s, a):
         x = self(s)
+        import torch.nn.functional as F
+        softx = F.softmax(x, dim=1)
 
         normal = torch.distributions.Categorical(logits=x)
         logpi = normal.log_prob(a)
@@ -196,7 +198,8 @@ class PPO(torch.nn.Module):
             v_loss = ((v - vs) ** 2).mean()
         else:
             clip_v = oldv + torch.clamp(v - oldv, -self.epsilon, self.epsilon)
-            v_loss = torch.max(((v - vs) ** 2).mean(), ((clip_v - vs) ** 2).mean())
+            v_max = torch.max(((v - vs) ** 2), ((clip_v - vs) ** 2))
+            v_loss = v_max.mean()
 
         loss = aloss + loss_entropy*self.c_en + v_loss*self.c_vf
         loss.backward()
