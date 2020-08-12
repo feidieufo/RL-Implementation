@@ -104,13 +104,13 @@ if __name__ == '__main__':
     parser.add_argument('--exp_name', default="ppo_cartpole")
     parser.add_argument('--seed', default=0, type=int)
     parser.add_argument('--batch', default=50, type=int)
-    parser.add_argument('--norm_state', default=False)
-    parser.add_argument('--norm_rewards', default=False)
-    parser.add_argument('--is_clip_v', default=True)
-    parser.add_argument('--is_gae', default=True)
-    parser.add_argument('--max_grad_norm', default=False)
-    parser.add_argument('--anneal_lr', default=False)
-    parser.add_argument('--debug', default=True)
+    parser.add_argument('--norm_state', default=False, type=bool)
+    parser.add_argument('--norm_rewards', default=False, type=bool)
+    parser.add_argument('--is_clip_v', default=True, type=bool)
+    parser.add_argument('--is_gae', default=True, type=bool)
+    parser.add_argument('--max_grad_norm', default=False, type=bool)
+    parser.add_argument('--anneal_lr', default=False, type=bool)
+    parser.add_argument('--debug', default=True, type=bool)
     parser.add_argument('--log_every', default=10, type=int)
     parser.add_argument('--target_kl', default=0.03, type=float)
     parser.add_argument('--test_epoch', default=10, type=int)    
@@ -126,6 +126,7 @@ if __name__ == '__main__':
     writer = SummaryWriter(os.path.join(logger.output_dir, "logs"))
 
     env = gym.make(args.env)
+    test_env = gym.make(args.env)
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     env.seed(args.seed)
@@ -150,13 +151,13 @@ if __name__ == '__main__':
     elif args.norm_rewards == "returns":
         reward_norm = RewardFilter(reward_norm, (), clip=10.0)
 
+    state_norm.reset()
+    reward_norm.reset()
+    obs = env.reset()
+    obs = state_norm(obs)
     for iter in range(args.iteration):
         ppo.train()
         replay.reset()
-        state_norm.reset()
-        reward_norm.reset()
-        obs = env.reset()
-        obs = state_norm(obs)
         rew = 0
 
         for step in range(args.steps):
@@ -216,14 +217,13 @@ if __name__ == '__main__':
 
         ppo.eval()
         for i in range(args.test_epoch):
-            obs = env.reset()
+            test_obs = test_env.reset()
             state_norm.reset()
-            reward_norm.reset()
-            obs = state_norm(obs, update=False)
+            test_obs = state_norm(test_obs, update=False)
             rew = 0
 
             while True:
-                state_tensor = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
+                state_tensor = torch.tensor(test_obs, dtype=torch.float32, device=device).unsqueeze(0)
                 if type(env.action_space) == gym.spaces.Discrete:
                     a_tensor = ppo.actor(state_tensor)
                     a_tensor = torch.argmax(a_tensor, dim=1)
@@ -231,13 +231,13 @@ if __name__ == '__main__':
                     a_tensor, var = ppo.actor(state_tensor)
                 a_tensor = torch.squeeze(a_tensor, dim=0)
                 a = a_tensor.detach().cpu().numpy()
-                obs, r, done, _ = env.step(a)
+                test_obs, r, done, _ = test_env.step(a)
                 rew += r
 
                 if done:
                     logger.store(test_reward=rew)
                     break
-                obs = state_norm(obs, update=False)
+                test_obs = state_norm(test_obs, update=False)
         
         writer.add_scalar("test_reward", logger.get_stats("test_reward")[0], global_step=iter)  
         writer.add_scalar("reward", logger.get_stats("reward")[0], global_step=iter)
