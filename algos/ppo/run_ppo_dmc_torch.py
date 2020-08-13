@@ -140,11 +140,23 @@ if __name__ == '__main__':
         width=args.image_size,
         frame_skip=args.action_repeat
     )
+    test_env = dmc2gym.make(
+        domain_name=args.domain_name,
+        task_name=args.task_name,
+        seed=args.seed,
+        visualize_reward=False,
+        from_pixels=(args.encoder_type == 'pixel'),
+        height=args.image_size,
+        width=args.image_size,
+        frame_skip=args.action_repeat
+    )
     if args.encoder_type == 'pixel':
         env = DMCFrameStack(env, k=args.frame_stack)
+        test_env = DMCFrameStack(test_env, k=args.frame_stack)
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     env.seed(args.seed)
+    test_env.seed(args.seed)
 
     state_dim = env.observation_space.shape
     act_dim = env.action_space.shape
@@ -171,13 +183,13 @@ if __name__ == '__main__':
     elif args.norm_rewards == "returns":
         reward_norm = RewardFilter(reward_norm, (), clip=10.0)
 
+    state_norm.reset()
+    reward_norm.reset()
+    obs = env.reset()
+    obs = state_norm(obs)
     for iter in range(args.iteration):
         ppo.train()
         replay.reset()
-        state_norm.reset()
-        reward_norm.reset()
-        obs = env.reset()
-        obs = state_norm(obs)
         rew = 0
 
         for step in range(args.steps):
@@ -237,24 +249,24 @@ if __name__ == '__main__':
 
         ppo.eval()
         for i in range(args.test_epoch):
-            obs = env.reset()
+            test_obs = test_env.reset()
             state_norm.reset()
             reward_norm.reset()
-            obs = state_norm(obs, update=False)
+            test_obs = state_norm(test_obs, update=False)
             rew = 0
 
             while True:
-                state_tensor = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
+                state_tensor = torch.tensor(test_obs, dtype=torch.float32, device=device).unsqueeze(0)
                 a_tensor, var = ppo.actor(state_tensor)
                 a_tensor = torch.squeeze(a_tensor, dim=0)
                 a = a_tensor.detach().cpu().numpy()
-                obs, r, done, _ = env.step(np.clip(a, -1, 1))
+                test_obs, r, done, _ = test_env.step(np.clip(a, -1, 1))
                 rew += r
 
                 if done:
                     logger.store(test_reward=rew)
                     break
-                obs = state_norm(obs, update=False)
+                test_obs = state_norm(test_obs, update=False)
 
         writer.add_scalar("test_reward", logger.get_stats("test_reward")[0], global_step=iter)  
         writer.add_scalar("reward", logger.get_stats("reward")[0], global_step=iter)

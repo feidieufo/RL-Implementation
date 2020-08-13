@@ -172,7 +172,7 @@ if __name__ == '__main__':
             replay.add(obs, a, r, mask)
 
             obs = obs_
-            if done or step == args.steps-1:
+            if done:
                 logger.store(reward=rew)
                 rew = 0
                 obs = env.reset()
