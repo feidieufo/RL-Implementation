@@ -127,7 +127,7 @@ if __name__ == '__main__':
     parser.add_argument('--norm_state', default=False)
     parser.add_argument('--norm_rewards', default=False)
     parser.add_argument('--is_clip_v', default=True)
-    parser.add_argument('--max_grad_norm', default=False)
+    parser.add_argument('--max_grad_norm', default=-1, type=float)
     parser.add_argument('--anneal_lr', default=False)
     parser.add_argument('--debug', default=True)
     parser.add_argument('--log_every', default=10, type=int)
@@ -174,6 +174,7 @@ if __name__ == '__main__':
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     env.seed(args.seed)
+    test_env.seed(args.seed)
 
     state_dim = env.observation_space.shape
     act_dim = env.action_space.shape
@@ -205,10 +206,10 @@ if __name__ == '__main__':
     reward_norm.reset()
     obs = env.reset()
     obs = state_norm(obs)
+    rew = 0
     for iter in range(args.iteration):
         ppo.train()
         replay.reset()
-        rew = 0
 
         for step in range(args.steps):
             a_tensor = ppo.actor.select_action(obs)
@@ -240,8 +241,12 @@ if __name__ == '__main__':
             s = torch.tensor(state[pos], dtype=torch.float32).to(device)
             v = ppo.getV(s).detach().cpu().numpy()
             replay.update_v(v, pos)
-        replay.finish_path()
-
+        if args.last_v:
+            s_tensor = torch.tensor(obs, dtype=torch.float32).to(device).unsqueeze(0)
+            last_v = ppo.getV(s_tensor).detach().cpu().numpy() 
+            replay.finish_path(last_v=last_v) 
+        else:      
+            replay.finish_path()
         ppo.update_a()
 
         for i in range(args.a_update):
@@ -270,20 +275,18 @@ if __name__ == '__main__':
         ppo.eval()
         for i in range(args.test_epoch):
             test_obs = test_env.reset()
-            state_norm.reset()
-            reward_norm.reset()
             test_obs = state_norm(test_obs, update=False)
-            rew = 0
+            test_rew = 0
 
             while True:
                 a_tensor, var = ppo.actor(test_obs)
                 a_tensor = torch.squeeze(a_tensor, dim=0)
                 a = a_tensor.detach().cpu().numpy()
                 test_obs, r, done, _ = test_env.step(np.clip(a, -1, 1))
-                rew += r
+                test_rew += r
 
                 if done:
-                    logger.store(test_reward=rew)
+                    logger.store(test_reward=test_rew)
                     break
                 test_obs = state_norm(test_obs, update=False)
 

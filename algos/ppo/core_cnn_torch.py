@@ -156,7 +156,7 @@ class ActorDisc(torch.nn.Module):
 
 class PPO(torch.nn.Module):
     def __init__(self, state_dim, act_dim, act_max, epsilon, device, lr_a=0.001,
-                 c_en=0.01, c_vf=0.5, max_grad_norm=False, anneal_lr=False, train_steps=1000,):
+                 c_en=0.01, c_vf=0.5, max_grad_norm=-1, anneal_lr=False, train_steps=1000,):
         super().__init__()
         if type(act_dim) == np.int64 or type(act_dim) == np.int:
             self.actor = ActorDisc(state_dim, act_dim).to(device)
@@ -203,7 +203,7 @@ class PPO(torch.nn.Module):
 
         loss = aloss + loss_entropy*self.c_en + v_loss*self.c_vf
         loss.backward()
-        if self.max_grad_norm:
+        if self.max_grad_norm != -1:
             torch.nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
             torch.nn.utils.clip_grad_norm_(self.actor.parameters(), self.max_grad_norm)
         self.opti.step()

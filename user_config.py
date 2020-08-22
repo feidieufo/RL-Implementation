@@ -3,6 +3,7 @@ import os.path as osp
 
 # Where experiment outputs are saved by default:
 DEFAULT_DATA_DIR = osp.join(osp.abspath(osp.dirname(__file__)),'data')
+DEFAULT_IMG_DIR = osp.join(osp.abspath(osp.dirname(__file__)),'imgs')
 
 # Whether to automatically insert a date and time stamp into the names of
 # save directories:

@@ -52,7 +52,7 @@ class ReplayBuffer:
     def update_v(self, v, pos):
         self.v[pos] = v
 
-    def finish_path(self):
+    def finish_path(self, last_v=None):
         """
           Calculate GAE advantage, discounted returns, and
           true reward (average reward per trajectory)
@@ -63,7 +63,10 @@ class ReplayBuffer:
                    {v_s_{t+1} if s_t not terminal and t != T (last step)
                    {v_s if s_t not terminal and t == T
           """
-        v_ = np.concatenate([self.v[1:], self.v[-1:]], axis=0) * self.mask
+        if last_v is None:
+            v_ = np.concatenate([self.v[1:], self.v[-1:]], axis=0) * self.mask
+        else:
+            v_ = np.concatenate([self.v[1:], [last_v]], axis=0) * self.mask
         adv = self.reward + self.gamma * v_ - self.v
 
         indices = get_path_indices(self.mask)
@@ -107,8 +110,9 @@ if __name__ == '__main__':
     parser.add_argument('--norm_state', default=False, type=bool)
     parser.add_argument('--norm_rewards', default=False, type=bool)
     parser.add_argument('--is_clip_v', default=True, type=bool)
+    parser.add_argument('--last_v', default=False, type=bool)
     parser.add_argument('--is_gae', default=True, type=bool)
-    parser.add_argument('--max_grad_norm', default=False, type=bool)
+    parser.add_argument('--max_grad_norm', default=-1, type=float)
     parser.add_argument('--anneal_lr', default=False, type=bool)
     parser.add_argument('--debug', default=True, type=bool)
     parser.add_argument('--log_every', default=10, type=int)
@@ -130,6 +134,7 @@ if __name__ == '__main__':
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     env.seed(args.seed)
+    test_env.seed(args.seed)
 
     state_dim = env.observation_space.shape
     if type(env.action_space) == gym.spaces.Discrete:
@@ -155,10 +160,10 @@ if __name__ == '__main__':
     reward_norm.reset()
     obs = env.reset()
     obs = state_norm(obs)
+    rew = 0
     for iter in range(args.iteration):
         ppo.train()
         replay.reset()
-        rew = 0
 
         for step in range(args.steps):
             state_tensor = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
@@ -189,7 +194,12 @@ if __name__ == '__main__':
             s = torch.tensor(state[pos], dtype=torch.float32).to(device)
             v = ppo.getV(s).detach().cpu().numpy()
             replay.update_v(v, pos)
-        replay.finish_path()
+        if args.last_v:
+            s_tensor = torch.tensor(obs, dtype=torch.float32).to(device).unsqueeze(0)
+            last_v = ppo.getV(s_tensor).detach().cpu().numpy() 
+            replay.finish_path(last_v=last_v) 
+        else:      
+            replay.finish_path()
 
         ppo.update_a()
         for i in range(args.a_update):
@@ -218,9 +228,8 @@ if __name__ == '__main__':
         ppo.eval()
         for i in range(args.test_epoch):
             test_obs = test_env.reset()
-            state_norm.reset()
             test_obs = state_norm(test_obs, update=False)
-            rew = 0
+            test_rew = 0
 
             while True:
                 state_tensor = torch.tensor(test_obs, dtype=torch.float32, device=device).unsqueeze(0)
@@ -232,10 +241,10 @@ if __name__ == '__main__':
                 a_tensor = torch.squeeze(a_tensor, dim=0)
                 a = a_tensor.detach().cpu().numpy()
                 test_obs, r, done, _ = test_env.step(a)
-                rew += r
+                test_rew += r
 
                 if done:
-                    logger.store(test_reward=rew)
+                    logger.store(test_reward=test_rew)
                     break
                 test_obs = state_norm(test_obs, update=False)
         

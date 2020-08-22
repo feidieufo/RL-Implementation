@@ -158,7 +158,7 @@ if __name__ == '__main__':
     parser.add_argument('--norm_state', default=True)
     parser.add_argument('--norm_rewards', default=True)
     parser.add_argument('--is_clip_v', default=True)
-    parser.add_argument('--max_grad_norm', default=False)
+    parser.add_argument('--max_grad_norm', default=-1, type=float)
     parser.add_argument('--anneal_lr', default=False)
     parser.add_argument('--debug', default=False)
     parser.add_argument('--log_every', default=10)
