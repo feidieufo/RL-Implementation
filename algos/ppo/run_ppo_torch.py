@@ -108,7 +108,7 @@ if __name__ == '__main__':
     parser.add_argument('--seed', default=0, type=int)
     parser.add_argument('--batch', default=50, type=int)
     parser.add_argument('--norm_state', action="store_true")
-    parser.add_argument('--norm_rewards', default=False, type=bool)
+    parser.add_argument('--norm_rewards', default=None, type=str)
     parser.add_argument('--is_clip_v', action="store_true")
     parser.add_argument('--last_v', action="store_true")
     parser.add_argument('--is_gae', action="store_true")
@@ -226,6 +226,8 @@ if __name__ == '__main__':
             ppo.lr_scheduler()
 
         ppo.eval()
+        test_a = []
+        test_a_std = []
         for i in range(args.test_epoch):
             test_obs = test_env.reset()
             test_obs = state_norm(test_obs, update=False)
@@ -237,11 +239,14 @@ if __name__ == '__main__':
                     a_tensor = ppo.actor(state_tensor)
                     a_tensor = torch.argmax(a_tensor, dim=1)
                 else:
-                    a_tensor, var = ppo.actor(state_tensor)
+                    a_tensor, std = ppo.actor(state_tensor)
                 a_tensor = torch.squeeze(a_tensor, dim=0)
                 a = a_tensor.detach().cpu().numpy()
                 test_obs, r, done, _ = test_env.step(a)
                 test_rew += r
+
+                test_a.append(a)
+                test_a_std.append(std.detach().cpu().numpy())
 
                 if done:
                     logger.store(test_reward=test_rew)
@@ -251,6 +256,9 @@ if __name__ == '__main__':
         writer.add_scalar("test_reward", logger.get_stats("test_reward")[0], global_step=iter)  
         writer.add_scalar("reward", logger.get_stats("reward")[0], global_step=iter)
         writer.add_histogram("action", np.array(replay.action), global_step=iter)
+        writer.add_histogram("test_action", np.array(test_a), global_step=iter)
+        writer.add_histogram("test_action_std", np.array(test_a_std), global_step=iter)
+
         if args.debug:
             writer.add_scalar("aloss", logger.get_stats("aloss")[0], global_step=iter)
             writer.add_scalar("vloss", logger.get_stats("vloss")[0], global_step=iter)

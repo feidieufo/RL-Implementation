@@ -57,12 +57,11 @@ class Actor(torch.nn.Module):
     def forward(self, emb):
         mu = self.mu(emb)*self.a_max
 
-        return mu, self.var
+        return mu, torch.exp(self.var)
 
     def select_action(self, emb):
         with torch.no_grad():
-            mean, var = self(emb)
-            std = torch.exp(var)
+            mean, std = self(emb)
 
             normal = Normal(mean, std)
             action = normal.sample()                  # [1, a_dim]
@@ -77,8 +76,9 @@ class Actor(torch.nn.Module):
         normal = Normal(mean, std)
         logpi = normal.log_prob(a)
         logpi = torch.sum(logpi, dim=1)
+        entropy = normal.entropy().sum(dim=1)
 
-        return logpi                       # [None,]
+        return logpi, entropy                       # [None,]
 
 class ActorDisc(torch.nn.Module):
     def __init__(self, s_dim, a_num, emb_dim=512):
@@ -143,14 +143,15 @@ class PPO(torch.nn.Module):
 
     def train_ac(self, s, a, adv, vs, oldv, is_clip_v=True):
         self.opti.zero_grad()
-        logpi = self.actor.log_pi(s, a)
-        old_logpi = self.old_actor.log_pi(s, a)
+        logpi, entropy = self.actor.log_pi(s, a)
+        old_logpi, _ = self.old_actor.log_pi(s, a)
 
         ratio = torch.exp(logpi - old_logpi)
         surr = ratio * adv
         clip_adv = torch.clamp(ratio, 1 - self.epsilon, 1 + self.epsilon) * adv
         aloss = -torch.mean(torch.min(surr, clip_adv))
-        loss_entropy = torch.mean(torch.exp(logpi) * logpi)
+        # loss_entropy = torch.mean(torch.exp(logpi) * logpi)
+        loss_entropy = entropy.mean()
         kl = torch.mean(torch.exp(logpi) * (logpi - old_logpi))
 
         v = self.critic(s)
@@ -162,7 +163,7 @@ class PPO(torch.nn.Module):
             clip_v = oldv + torch.clamp(v - oldv, -self.epsilon, self.epsilon)
             v_loss = torch.max(((v - vs) ** 2).mean(), ((clip_v - vs) ** 2).mean())
 
-        loss = aloss + loss_entropy*self.c_en + v_loss*self.c_vf
+        loss = aloss - loss_entropy*self.c_en + v_loss*self.c_vf
         loss.backward()
         if self.max_grad_norm != -1:
             torch.nn.utils.clip_grad_norm_(self.critic.parameters(), self.max_grad_norm)
