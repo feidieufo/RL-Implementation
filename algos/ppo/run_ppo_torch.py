@@ -97,6 +97,8 @@ if __name__ == '__main__':
     parser.add_argument('--iteration', default=int(1e3), type=int)
     parser.add_argument('--gamma', default=0.99, type=float)
     parser.add_argument('--lam', default=0.95, type=float)
+    parser.add_argument('--c_en', default=0.01, type=float)    
+    parser.add_argument('--c_vf', default=0.5, type=float)
     parser.add_argument('--a_update', default=10, type=int)
     parser.add_argument('--lr', default=3e-4, type=float)
     parser.add_argument('--log', type=str, default="logs")
@@ -144,7 +146,7 @@ if __name__ == '__main__':
         act_dim = env.action_space.shape
         action_max = env.action_space.high[0]
     ppo = core.PPO(state_dim, act_dim, action_max, 0.2, device, lr_a=args.lr, max_grad_norm=args.max_grad_norm,
-                   anneal_lr=args.anneal_lr, train_steps=args.iteration)
+                   anneal_lr=args.anneal_lr, train_steps=args.iteration, c_en=args.c_en, c_vf=args.c_vf)
     replay = ReplayBuffer(args.steps, state_dim, act_dim, is_gae=args.is_gae)
 
     state_norm = Identity()
@@ -218,7 +220,7 @@ if __name__ == '__main__':
                     logger.store(entropy=info["entropy"])
                     logger.store(kl=info["kl"])
             
-            if logger.get_stats("kl")[0] > args.target_kl:
+            if logger.get_stats("kl", with_min_and_max=True)[3] > args.target_kl:
                 print("stop at:", str(i))
                 break
 

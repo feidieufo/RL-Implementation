@@ -349,10 +349,10 @@ class EpochLogger(Logger):
                 super().log_tabular('Min'+key, stats[2])
         self.epoch_dict[key] = []
 
-    def get_stats(self, key):
+    def get_stats(self, key, with_min_and_max=False):
         """
         Lets an algorithm ask the logger for mean/std/min/max of a diagnostic.
         """
         v = self.epoch_dict[key]
         vals = np.concatenate(v) if isinstance(v[0], np.ndarray) and len(v[0].shape)>0 else v
-        return mpi_statistics_scalar(vals)
+        return mpi_statistics_scalar(vals, with_min_and_max)

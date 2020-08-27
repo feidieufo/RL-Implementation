@@ -117,6 +117,8 @@ if __name__ == '__main__':
     parser.add_argument('--lam', default=0.95, type=float)
     parser.add_argument('--a_update', default=10, type=int)
     parser.add_argument('--lr_a', default=2.5e-4, type=float)
+    parser.add_argument('--c_en', default=0.01, type=float)    
+    parser.add_argument('--c_vf', default=0.5, type=float)
     parser.add_argument('--log', type=str, default="logs")
     parser.add_argument('--steps', default=3000, type=int)
     parser.add_argument('--gpu', default=0, type=int)
@@ -183,7 +185,8 @@ if __name__ == '__main__':
         import algos.vae.core_vae as core
         ppo = core.PPO(state_dim, act_dim, action_max, 0.2, device, lr_a=args.lr_a,
                        max_grad_norm=args.max_grad_norm,
-                       anneal_lr=args.anneal_lr, train_steps=args.iteration, emb_dim=args.feature_dim)
+                       anneal_lr=args.anneal_lr, train_steps=args.iteration, emb_dim=args.feature_dim,
+                       c_en=args.c_en, c_vf=args.c_vf)
 
     replay = ReplayBuffer(args.steps, args.feature_dim, act_dim)
     encoder = PixelEncoder(state_dim, args.feature_dim, num_layers=4).to(device)
@@ -265,7 +268,7 @@ if __name__ == '__main__':
                     logger.store(entropy=info["entropy"])
                     logger.store(kl=info["kl"])
 
-            if logger.get_stats("kl")[0] > args.target_kl:
+            if logger.get_stats("kl", with_min_and_max=True)[3] > args.target_kl:
                 print("stop at:", str(i))
                 break
 
