@@ -1,8 +1,3 @@
-try:
-    import algos.ppo.core_cnn_torch as core
-except Exception:
-    import core_cnn_torch as core
-
 import numpy as np
 import gym
 import argparse
@@ -16,6 +11,9 @@ import dmc2gym
 from collections import deque
 from env.dmc_env import DMCFrameStack
 from utils.normalization import *
+from utils.video import VideoRecorder
+from user_config import DEFAULT_VIDEO_DIR
+import pickle
 
 
 if __name__ == '__main__':
@@ -27,11 +25,12 @@ if __name__ == '__main__':
     parser.add_argument('--frame_stack', default=3, type=int)
     parser.add_argument('--encoder_type', default='pixel', type=str)
 
-    parser.add_argument('--exp_name', default="ppo_cheetah_run_clipv_maxgrad_anneallr2.5e-3_stack3_normal_state01")
-    parser.add_argument('--seed', default=10)
-    parser.add_argument('--norm_state', default=False)
-    parser.add_argument('--norm_rewards', default=False)
+    parser.add_argument('--exp_name', default="ppo_test_cheetah_run_clipv_maxgrad_anneallr3e-4_normal_maxkl0.05_gae_norm-state_return_steps2048_batch256_notdone_lastv_4_entropy_update30")
+    parser.add_argument('--seed', default=10, type=int)
+    parser.add_argument('--norm_state', default=True, type=bool)
+    parser.add_argument('--norm_rewards', default=True, type=bool)
     parser.add_argument('--check_num', default=900, type=int)
+    parser.add_argument('--test_num', default=10, type=int)
     args = parser.parse_args()
 
     # env = gym.make("Hopper-v2")
@@ -47,14 +46,19 @@ if __name__ == '__main__':
     )
     if args.encoder_type == 'pixel':
         env = DMCFrameStack(env, k=args.frame_stack)
+        import algos.ppo.core_cnn_torch as core
+    else:
+        import algos.ppo.core_torch as core
+
     state_dim = env.observation_space.shape
     act_dim = env.action_space.shape[0]
+    action_max = env.action_space.high[0]
     device = torch.device("cuda:" + str(0) if torch.cuda.is_available() else "cpu")
 
     from utils.run_utils import setup_logger_kwargs
     logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
 
-    actor = core.Actor(state_dim, act_dim).to(device)
+    actor = core.Actor(state_dim, act_dim, action_max).to(device)
     checkpoint = torch.load(os.path.join(logger_kwargs["output_dir"], "checkpoints", str(args.check_num) + '.pth'))
     actor.load_state_dict(checkpoint["actor"])
 
@@ -63,34 +67,47 @@ if __name__ == '__main__':
     reward_norm = Identity()
     file = os.path.join(logger_kwargs["output_dir"], "checkpoints", str(args.check_num) + '.pkl')
     with open(file, "rb") as f:
+        norm = pickle.load(f)
         if args.norm_state:
-            state_norm = pickle.load(f)["state"]
+            state_norm = norm["state"]
         if args.norm_rewards:
-            reward_norm = pickle.load(f)["reward"]
+            reward_norm = norm["reward"]
 
-    obs = env.reset()
-    obs = state_norm(obs)
-    rew = 0
+    out_file = os.path.join(DEFAULT_VIDEO_DIR, args.exp_name)
+    if not os.path.exists(DEFAULT_VIDEO_DIR):
+        os.mkdir(DEFAULT_VIDEO_DIR)
+    if not os.path.exists(out_file):
+        os.mkdir(out_file)
+
+    video = VideoRecorder(out_file)
     rew_list = []
-    epi = 0
-    while True:
-        # env.render()
-        state_tensor = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
-        a, var = actor(state_tensor)
-        logpi = actor.log_pi(state_tensor, a)
-        a = torch.squeeze(a, 0).detach().cpu().numpy()
-        obs, r, d, _ = env.step(a)
-
-        rew += r
-        if d:
-            rew_list.append(rew)
-            epi += 1
-            # print("reward", rew)
-
-            if epi % 10 == 0:
-                print("teset_", np.mean(rew_list))
-                rew_list = []
-            obs = env.reset()
-            rew = 0
-
+    for i in range(args.test_num):
+        video.init()
+        obs = env.reset()
         obs = state_norm(obs)
+        rew = 0
+
+        while True:
+            # env.render()
+            video.record(env)
+            state_tensor = torch.tensor(obs, dtype=torch.float32, device=device).unsqueeze(0)
+            a, var = actor(state_tensor)
+            logpi = actor.log_pi(state_tensor, a)
+            a = torch.squeeze(a, 0).detach().cpu().numpy()
+            obs, r, d, _ = env.step(a)
+
+            rew += r
+            obs = state_norm(obs)
+            if d:
+                rew_list.append(rew)
+                print("reward", rew)
+                video.save(str(i) + ".mp4")
+
+                if (i+1) % 10 == 0:
+                    print("teset_", np.mean(rew_list))
+                    rew_list = []
+
+                break
+
+
+
